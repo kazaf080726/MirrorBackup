@@ -1,0 +1,23 @@
+# Gradle
+.gradle/
+build/
+app/build/
+.kotlin/
+
+# IDE
+.idea/
+*.iml
+
+# 本机配置（含绝对路径）
+local.properties
+
+# 签名密钥（私密，切勿提交）
+keystore/
+*.jks
+*.keystore
+signing.properties
+
+# 其他
+captures/
+dist/
+.DS_Store

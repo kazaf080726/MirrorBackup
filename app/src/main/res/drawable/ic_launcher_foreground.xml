@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 全新图标：盾牌（安全）+ 闪电（极速多线程）+ 数据条（镜像存储） -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- 盾牌主体 -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M54,27 L76,36.5 L76,53.5 C76,67.5 65.5,78.5 54,82.5 C42.5,78.5 32,67.5 32,53.5 L32,36.5 Z" />
+    <!-- 闪电（速度/多线程） -->
+    <path
+        android:fillColor="#1677FF"
+        android:pathData="M55.5,38.5 L43.5,54.5 L51,54.5 L47.5,67.5 L61,50 L53,50 Z" />
+    <!-- 数据条（镜像存储） -->
+    <path
+        android:fillColor="#1677FF"
+        android:pathData="M46,71 h16 v3 h-16 z" />
+    <path
+        android:fillColor="#1677FF"
+        android:pathData="M46,76.5 h16 v3 h-16 z" />
+</vector>

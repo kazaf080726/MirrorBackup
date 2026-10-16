@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="miui_bg_light">#F4F6FA</color>
+    <color name="miui_bg_dark">#10141A</color>
+    <color name="ic_launcher_background">#1677FF</color>
+</resources>
