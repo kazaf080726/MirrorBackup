@@ -74,8 +74,9 @@ class RestoreEngine(
         val device: DeviceInfo,
         val fingerprintMatch: Boolean,
         val previews: List<PartitionPreview>,
-        val blacklistedNames: List<String>,
-        val invalidNames: List<String>
+        val blacklistedNames: List<String>,   // 用户黑名单中的分区（拒绝写入）
+        val invalidNames: List<String>,       // 非法分区名（拒绝操作）
+        val riskyNames: List<String>          // 引导相关分区（仅风险提示，由用户决策）
     )
 
     /** 读取压缩包 manifest 并与当前设备做初步比对（不写入任何东西） */
@@ -118,15 +119,22 @@ class RestoreEngine(
             throw RestoreAbort("manifest 为空")
         }
 
-        // 规则3：黑名单分区拒绝操作（防御恶意/异常压缩包）
-        val blacklisted = m.partitions.map { it.name }.filter { PartitionRules.isBlacklisted(it) }
+        // 用户自主黑名单：黑名单内的分区拒绝写入（用户可在设置中移除）
+        val userBlack = UserBlacklist.load(context)
+        val blacklisted = m.partitions.map { it.name }.filter { it in userBlack }
         if (blacklisted.isNotEmpty()) {
-            log.error("❌ 压缩包包含黑名单分区 ${blacklisted.joinToString(" ") { it }}，本应用拒绝操作这些分区")
+            log.error("⛔ 以下分区在你设置的黑名单中，本应用拒绝写入（可在设置中移除）: ${blacklisted.joinToString(" ")}")
         }
+        // 非法分区名：防御恶意 manifest 路径注入（技术性校验，非分区排除）
         val invalid = m.partitions.filter { !NAME_RE.matches(it.name) || it.path.contains("..") }
             .map { it.name }
         if (invalid.isNotEmpty()) {
             log.error("❌ manifest 含非法分区名 ${invalid.joinToString(" ")}，拒绝操作")
+        }
+        // 引导相关分区：仅风险提示，由用户自行决策
+        val risky = m.partitions.map { it.name }.filter { PartitionRules.isRisky(it) }
+        if (risky.isNotEmpty()) {
+            log.warn("⚠ 风险提示：该包包含引导相关分区（${risky.joinToString(" ")}），请确认目标设备与备份设备一致")
         }
 
         // 当前设备信息与分区
@@ -157,7 +165,7 @@ class RestoreEngine(
         }
 
         setProgress(Progress(Phase.IDLE, "", 0, 0, 0.0, "解析完成"))
-        return LoadResult(m, device, fingerprintMatch, previews, blacklisted, invalid)
+        return LoadResult(m, device, fingerprintMatch, previews, blacklisted, invalid, risky)
     }
 
     /** 预览校验（第①层 + 第②层），不执行任何写入 */
@@ -237,6 +245,15 @@ class RestoreEngine(
                 log.ok("✔ 第③层校验通过：设备指纹一致")
             }
 
+            // ── 用户黑名单校验：黑名单内的分区拒绝写入 ──
+            val userBlack = UserBlacklist.load(context)
+            val blackHits = map.keys.filter { it in userBlack }
+            if (blackHits.isNotEmpty()) {
+                log.error("⛔ 分区 ${blackHits.joinToString(" ")} 在你的黑名单中，写入已阻断（可在设置中移除后重试）")
+                setProgress(Progress(Phase.FAILED, "", 0, 0, 0.0, "用户黑名单阻断"))
+                return
+            }
+
             // ── 写入阶段 ──
             log.info("── 开始写入分区（dd 流式写入）──")
             var index = 0
@@ -261,10 +278,8 @@ class RestoreEngine(
                         continue
                     }
                     if (cancelled) throw CancellationException("用户取消")
-                    if (PartitionRules.isBlacklisted(name)) {
-                        log.error("❌ 拒绝写入黑名单分区: $name")
-                        zip.closeEntry()
-                        continue
+                    if (PartitionRules.isRisky(name)) {
+                        log.warn("⚠ 风险提示：$name 为引导相关分区，已按你的选择执行恢复")
                     }
                     index++
                     log.info("▶ [${index}/${map.size}] 恢复分区: $name")

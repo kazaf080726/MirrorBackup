@@ -1,7 +1,7 @@
 # 镜像备份 (MirrorBackup)
 
 > 一款运行于已 ROOT 安卓设备上的本地分区镜像备份/恢复工具
-> 作者：**Kazaf** · 全程离线 · 无联网权限 · 无广告 · 无数据上传
+> 作者：**Kazaf** · 除检查更新外全程离线 · 无广告 · 无数据上传
 
 [![Android](https://img.shields.io/badge/Android-13%2B-green)](https://developer.android.com)
 [![Kotlin](https://img.shields.io/badge/Kotlin-2.0-blue)](https://kotlinlang.org)
@@ -63,7 +63,7 @@ keytool -genkeypair -v -keystore keystore/mirrorbackup.jks \
 
 ## 🔒 隐私与离线承诺
 
-- APK 不声明任何网络权限，无埋点、无统计、无广告
+- 网络仅用于「检查更新 / 下载更新包」（用户主动触发时访问 GitHub API），其余功能全程离线、无埋点、无统计、无广告
 - 设备指纹仅使用 SN + CPU ID，**不采集 IMEI**
 - 所有镜像与 manifest 均通过 SAF 由用户选择导出位置
 
@@ -73,6 +73,19 @@ keytool -genkeypair -v -keystore keystore/mirrorbackup.jks \
 
 ## 版本历史
 
+- **v2.1.0（App）/ v1.0.0（模块）**：iOS 27 液态玻璃重构（预渲染软件模糊背景 + 镜面高光 + 渐变边缘光，规避 OEM hwui 崩溃）；黑名单全面交给用户（无任何隐性排除）；提取辅助模块（静态 img2simg/simg2img + update.json 管理器内升级）；应用内检查更新与一键升级（App+模块协同）；大容量目标二次确认；预测性返回
 - **v2.0.1**：修复启动闪退（Compose 快照竞态）；分区扫描与排除明细全透明（实测 OPPO PLC110：扫描 102 个分区，黑名单 8 个明示排除）
 - **v2.0.0**：四种备份模式 / 多线程备份 / 双重校验 / 仅存储 ZIP / 液态玻璃 UI / 全新图标
 - **v1.0.0**：初版（全量 / 私有分区两模式）
+
+## 🧩 提取辅助模块
+
+- 提供 AOSP libsparse 编译的 `img2simg` / `simg2img`（arm64），App 备份时自动优先使用
+- 自带 `update.json`：在 Magisk / KernelSU 管理器内可直接检查并升级
+- 下载：本仓库 Release 中的 `mirrorbackup-module-*.zip`
+
+## 🔄 应用内更新
+
+设置页可检查更新（仅此时访问 GitHub API，其余功能全程离线）：
+- 仅 App 更新 → 下载并安装 APK
+- 模块更新 → 先装模块再装 APK，一次完成（"只装一次"）

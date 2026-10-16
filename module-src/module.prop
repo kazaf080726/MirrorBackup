@@ -1,0 +1,7 @@
+id=mirrorbackup_module
+name=镜像备份 提取辅助模块
+version=v1.0.0
+versionCode=100
+author=Kazaf
+description=为「镜像备份」App 提供 AOSP libsparse 编译的 img2simg/simg2img（arm64），加速 SPARSE 稀疏镜像转换与还原。支持 Magisk / KernelSU / APatch，自带 update.json 可在管理器内直接升级。
+updateJson=https://raw.githubusercontent.com/kazaf080726/MirrorBackup/main/module/update.json

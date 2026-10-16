@@ -136,9 +136,26 @@ fun RestoreScreen(vm: RestoreViewModel) {
                     }
                     if (blockedByBlack) {
                         Spacer(Modifier.height(6.dp))
+                        if (l.blacklistedNames.isNotEmpty()) {
+                            Text(
+                                "⛔ 以下分区在你的黑名单中，本应用拒绝写入（可在设置页移除）: ${l.blacklistedNames.joinToString(" ")}",
+                                color = MiuiColors.Red,
+                                fontSize = 12.sp
+                            )
+                        }
+                        if (l.invalidNames.isNotEmpty()) {
+                            Text(
+                                "🚫 manifest 含非法分区名（${l.invalidNames.joinToString(" ")}），已拒绝操作",
+                                color = MiuiColors.Red,
+                                fontSize = 12.sp
+                            )
+                        }
+                    }
+                    if (l.riskyNames.isNotEmpty()) {
+                        Spacer(Modifier.height(6.dp))
                         Text(
-                            "🚫 该包包含黑名单/非法分区名（${(l.blacklistedNames + l.invalidNames).joinToString(" ")}），本应用拒绝写入这些分区",
-                            color = MiuiColors.Red,
+                            "⚠ 风险提示：该包包含引导相关分区（${l.riskyNames.joinToString(" ")}），恢复前请确认目标设备与备份设备一致（由你决策）",
+                            color = MiuiColors.Orange,
                             fontSize = 12.sp
                         )
                     }

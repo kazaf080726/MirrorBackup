@@ -21,3 +21,7 @@ signing.properties
 captures/
 dist/
 .DS_Store
+
+# 模块构建缓存（AOSP 源码与 NDK 产物）
+module-build/
+

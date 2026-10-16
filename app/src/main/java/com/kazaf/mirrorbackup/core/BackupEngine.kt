@@ -109,7 +109,8 @@ class BackupEngine(
         mode: BackupMode,
         manualSelection: Set<String>,
         threadMode: ThreadMode,
-        sparse: Boolean
+        sparse: Boolean,
+        userBlacklist: Set<String>
     ) {
         cancelled = false
         _packPrompt.value = null
@@ -143,7 +144,7 @@ class BackupEngine(
             if (device.sn.isBlank()) log.warn("⚠ 未获取到 SN，指纹将以 CPU ID 为主")
             if (device.cpuId.isBlank()) log.warn("⚠ 未获取到 CPU ID，恢复时指纹匹配可能受限")
 
-            // ── 规则3：分区枚举 + 模式筛选 ──
+            // ── 规则3：分区枚举 + 模式筛选（排除仅来自用户黑名单，无任何隐性排除） ──
             log.info("正在扫描 /dev/block/by-name …")
             val all = PartitionScanner.scan(su, log)
             if (all.isEmpty()) {
@@ -151,12 +152,15 @@ class BackupEngine(
                 setProgress(Progress(Phase.FAILED, "", 0, 0, 0.0, 0, "分区枚举失败"))
                 return
             }
-            val targets = PartitionRules.select(all, mode, manualSelection)
-            val breakdown = PartitionRules.analyze(all, mode, manualSelection)
+            val targets = PartitionRules.select(all, mode, manualSelection, userBlacklist)
+            val breakdown = PartitionRules.analyze(all, mode, manualSelection, userBlacklist)
             log.info("✅ 扫描完成: /dev/block/by-name 共 ${all.size} 个分区")
-            val blackFound = breakdown.blacklisted
-            if (blackFound.isNotEmpty()) {
-                log.info("🔴 安全规则排除黑名单 ${blackFound.size} 个（永不扫描/备份/写入）: ${blackFound.joinToString(" ") { it.name }}")
+            if (breakdown.userBlacklisted.isNotEmpty()) {
+                log.info("⛔ 按你的黑名单排除 ${breakdown.userBlacklisted.size} 个: ${breakdown.userBlacklisted.joinToString(" ") { it.name }}")
+            }
+            val risky = breakdown.riskyTargets
+            if (risky.isNotEmpty()) {
+                log.warn("⚠ 风险提示：本次目标包含引导相关分区（${risky.joinToString(" ") { it.name }}），镜像切勿刷入不匹配的设备")
             }
             if (mode == BackupMode.NORMAL) {
                 val skipped = breakdown.superParts + breakdown.largeParts
@@ -458,18 +462,8 @@ class BackupEngine(
         var format = "raw"
         if (sparse) {
             if (cancelled) throw CancellationException("用户取消")
-            log.info("   ⇄ ${part.name} 转换为 SPARSE 稀疏镜像（内置 libsparse）…")
             val simgFile = File(dir, "${part.name}.simg")
-            var lastReport = 0L
-            FileInputStream(rawFile).use { fis ->
-                LibSparse.encode(fis, part.sizeBytes, simgFile) { done ->
-                    if (done - lastReport >= 64L * 1024 * 1024 || done >= part.sizeBytes) {
-                        lastReport = done
-                        val pct = if (part.sizeBytes > 0) done * 100.0 / part.sizeBytes else 0.0
-                        log.progress("conv:${part.name}", f("   ↻ 稀疏转换 %s: %.1f%%", part.name, pct))
-                    }
-                }
-            }
+            convertToSparse(rawFile, simgFile, part.sizeBytes)
             rawFile.delete()
             finalFile = simgFile
             su.exec("chmod 644 ${SuManager.quote(simgFile.absolutePath)} 2>/dev/null", 10_000)
@@ -483,6 +477,74 @@ class BackupEngine(
         }
         log.ok("✔ ${part.name} 备份完成  SHA256=${finalSha.take(16)}…")
         return ImageResult(part.name, finalFile, part.sizeBytes, finalSha, 0L, format, ts.format(Date()), rawSha)
+    }
+
+    /** 稀疏转换：提取辅助模块静态 img2simg 优先，内置 Kotlin libsparse 兜底 */
+    private suspend fun convertToSparse(rawFile: File, simgFile: File, rawSize: Long) {
+        val hasBin = try {
+            su.exec("command -v img2simg 2>/dev/null", 8_000).stdout.trim().startsWith("/")
+        } catch (e: Exception) {
+            false
+        }
+        if (hasBin) {
+            log.info("   ⇄ ${rawFile.nameWithoutExtension} 使用提取辅助模块 img2simg 转换（静态 libsparse）…")
+            val proc = su.open(
+                "img2simg ${SuManager.quote(rawFile.absolutePath)} ${SuManager.quote(simgFile.absolutePath)} 2>&1"
+            )
+            while (proc.isAlive()) {
+                delay(500)
+                if (cancelled) {
+                    proc.destroy()
+                    break
+                }
+                val cur = simgFile.length()
+                val pct = if (rawSize > 0) (cur.toDouble() / rawSize * 100).coerceAtMost(99.0) else 0.0
+                log.progress(
+                    "conv:${rawFile.nameWithoutExtension}",
+                    f("   ↻ 模块转换 %s: %.1f%% (%s)", rawFile.nameWithoutExtension, pct, fmtSize(cur))
+                )
+            }
+            val exited = proc.waitForExit(8_000)
+            if (!exited) proc.destroy()
+            if (cancelled) throw CancellationException("用户取消")
+            val exit = if (exited) proc.exitCode() else -1
+            if (exit == 0 && isSparseFile(simgFile)) {
+                log.ok(f("   ✔ 模块 img2simg 转换完成: %s", fmtSize(simgFile.length())))
+                return
+            }
+            log.warn(f("   ⚠ 模块 img2simg 失败 (exit=$exit)，回退内置 Kotlin libsparse"))
+            simgFile.delete()
+        }
+        log.info("   ⇄ ${rawFile.nameWithoutExtension} 使用内置 Kotlin libsparse 转换…")
+        var lastReport = 0L
+        FileInputStream(rawFile).use { fis ->
+            LibSparse.encode(fis, rawSize, simgFile) { done ->
+                if (done - lastReport >= 64L * 1024 * 1024 || done >= rawSize) {
+                    lastReport = done
+                    val pct = if (rawSize > 0) done * 100.0 / rawSize else 0.0
+                    log.progress(
+                        "conv:${rawFile.nameWithoutExtension}",
+                        f("   ↻ 稀疏转换 %s: %.1f%%", rawFile.nameWithoutExtension, pct)
+                    )
+                }
+            }
+        }
+    }
+
+    /** 校验文件是否为 libsparse 稀疏镜像（magic 0xED26FF3A） */
+    private fun isSparseFile(f: File): Boolean {
+        if (!f.exists() || f.length() < 28) return false
+        return try {
+            FileInputStream(f).use { fis ->
+                val h = ByteArray(4)
+                if (fis.read(h) < 4) return false
+                val magic = (h[0].toLong() and 0xFF) or ((h[1].toLong() and 0xFF) shl 8) or
+                    ((h[2].toLong() and 0xFF) shl 16) or ((h[3].toLong() and 0xFF) shl 24)
+                magic == LibSparse.MAGIC
+            }
+        } catch (e: Exception) {
+            false
+        }
     }
 
     /**

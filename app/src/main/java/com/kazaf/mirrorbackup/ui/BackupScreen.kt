@@ -109,6 +109,29 @@ fun BackupScreen(vm: BackupViewModel, onOpenRestore: () -> Unit) {
         )
     }
 
+    // 大容量目标二次确认（>20GB，防止误触巨量备份）
+    var confirmBigTotal by remember { mutableStateOf<Long?>(null) }
+    confirmBigTotal?.let { total ->
+        AlertDialog(
+            onDismissRequest = { confirmBigTotal = null },
+            title = { Text("⚠ 确认大容量备份") },
+            text = {
+                Text(
+                    "本次备份目标预估总量 ${fmtSize(total)}（超过 20GB），将占用较多存储空间与时间。\n\n请确认是否继续？"
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmBigTotal = null
+                    vm.start()
+                }) { Text("确认备份") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmBigTotal = null }) { Text("取消") }
+            }
+        )
+    }
+
     // 任务中止警报弹窗
     var alertDismissed by remember { mutableStateOf(false) }
     LaunchedEffect(progress.phase) {
@@ -158,7 +181,7 @@ fun BackupScreen(vm: BackupViewModel, onOpenRestore: () -> Unit) {
                     selected = vm.mode == BackupMode.ALL,
                     emoji = "🗂️",
                     title = "全部备份",
-                    desc = "扫到多少备份多少\n含 super 与大容量分区\n🔴 黑名单除外",
+                    desc = "扫到多少备份多少\n含 super 与引导分区",
                     accent = MiuiColors.Blue,
                     onClick = { vm.chooseMode(BackupMode.ALL) },
                     modifier = Modifier.weight(1f)
@@ -167,7 +190,7 @@ fun BackupScreen(vm: BackupViewModel, onOpenRestore: () -> Unit) {
                     selected = vm.mode == BackupMode.NORMAL,
                     emoji = "📦",
                     title = "普通备份",
-                    desc = "仅跳过 super / >10GB\n🔴 黑名单除外",
+                    desc = "仅跳过 super / >10GB\n（黑名单由你决定）",
                     accent = MiuiColors.Orange,
                     onClick = { vm.chooseMode(BackupMode.NORMAL) },
                     modifier = Modifier.weight(1f)
@@ -196,7 +219,7 @@ fun BackupScreen(vm: BackupViewModel, onOpenRestore: () -> Unit) {
             }
             Spacer(Modifier.height(12.dp))
 
-            // ── 手动模式：分区勾选列表（含被安全规则禁用的黑名单分区） ──
+            // ── 手动模式：分区勾选列表（黑名单由你在此或设置页管理） ──
             AnimatedVisibility(visible = vm.mode == BackupMode.MANUAL) {
                 Column {
                     LiquidGlassCard(Modifier.fillMaxWidth()) {
@@ -216,13 +239,14 @@ fun BackupScreen(vm: BackupViewModel, onOpenRestore: () -> Unit) {
                             }
                         }
                         Text(
-                            "共扫描 ${vm.partitions.size} 个分区 · 其中 ${vm.partitions.size - vm.manualPartitions.size} 个黑名单分区禁止备份（下方置灰）",
+                            "共扫描 ${vm.partitions.size} 个分区 · 你已加入黑名单 ${vm.userBlacklist.size} 个（可在设置页管理）",
                             fontSize = 11.sp,
-                            color = MiuiColors.Red
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         LazyColumn(Modifier.height(200.dp)) {
                             items(vm.partitions) { part ->
-                                val black = com.kazaf.mirrorbackup.core.PartitionRules.isBlacklisted(part.name)
+                                val black = part.name in vm.userBlacklist
+                                val risky = com.kazaf.mirrorbackup.core.PartitionRules.isRisky(part.name)
                                 Row(
                                     Modifier.fillMaxWidth(),
                                     verticalAlignment = Alignment.CenterVertically
@@ -233,13 +257,13 @@ fun BackupScreen(vm: BackupViewModel, onOpenRestore: () -> Unit) {
                                         enabled = !black
                                     )
                                     Text(
-                                        if (black) "🔴 ${part.name}" else part.name,
+                                        (if (risky) "⚠ " else "") + part.name,
                                         fontSize = 13.sp,
                                         color = if (black) MiuiColors.Red else MaterialTheme.colorScheme.onSurface,
                                         modifier = Modifier.weight(1f)
                                     )
                                     Text(
-                                        if (black) "安全规则禁止备份" else fmtSize(part.sizeBytes),
+                                        if (black) "已加入黑名单" else fmtSize(part.sizeBytes),
                                         fontSize = 11.sp,
                                         color = if (black) MiuiColors.Red else MaterialTheme.colorScheme.onSurfaceVariant
                                     )
@@ -339,10 +363,10 @@ fun BackupScreen(vm: BackupViewModel, onOpenRestore: () -> Unit) {
                         )
                         Spacer(Modifier.height(6.dp))
                         val excluded = buildList {
-                            if (bd.blacklisted.isNotEmpty()) {
+                            if (bd.userBlacklisted.isNotEmpty()) {
                                 add(
-                                    "🔴 黑名单 ${bd.blacklisted.size} 个（永不备份）: " +
-                                        bd.blacklisted.joinToString(" ") { it.name }
+                                    "⛔ 你的黑名单 ${bd.userBlacklisted.size} 个: " +
+                                        bd.userBlacklisted.joinToString(" ") { it.name }
                                 )
                             }
                             if (vm.mode == BackupMode.NORMAL) {
@@ -357,8 +381,15 @@ fun BackupScreen(vm: BackupViewModel, onOpenRestore: () -> Unit) {
                                 }
                             }
                             if (vm.mode == BackupMode.PRIVATE) {
-                                val others = bd.scannedCount - bd.targetCount - bd.blacklisted.size
+                                val others = bd.scannedCount - bd.targetCount - bd.userBlacklisted.size
                                 if (others > 0) add("🟡 非私有分区未选择: $others 个")
+                            }
+                            if (bd.riskyTargets.isNotEmpty()) {
+                                add(
+                                    "⚠ 风险提示：目标包含引导相关分区（" +
+                                        bd.riskyTargets.joinToString(" ") { it.name } +
+                                        "），镜像切勿刷入不匹配的设备"
+                                )
                             }
                         }
                         excluded.forEach { line ->
@@ -457,7 +488,14 @@ fun BackupScreen(vm: BackupViewModel, onOpenRestore: () -> Unit) {
                 val canStart = rootOk && (vm.mode != BackupMode.MANUAL || vm.manualSelection.isNotEmpty())
                 MiuiButton(
                     text = "🚀 开始备份",
-                    onClick = { vm.start() },
+                    onClick = {
+                        val total = vm.selectedTargets.sumOf { it.sizeBytes }
+                        if (total > 20L * 1024 * 1024 * 1024) {
+                            confirmBigTotal = total
+                        } else {
+                            vm.start()
+                        }
+                    },
                     enabled = canStart,
                     modifier = Modifier.weight(1.3f)
                 )

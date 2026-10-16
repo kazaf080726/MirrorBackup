@@ -1,13 +1,17 @@
 package com.kazaf.mirrorbackup.ui.components
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
@@ -38,12 +42,14 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Shape
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
@@ -53,67 +59,39 @@ import com.kazaf.mirrorbackup.core.BackupRecord
 import com.kazaf.mirrorbackup.core.LogLevel
 import com.kazaf.mirrorbackup.core.LogLine
 import com.kazaf.mirrorbackup.core.f
+import com.kazaf.mirrorbackup.ui.glass.LiquidGlassState
+import com.kazaf.mirrorbackup.ui.glass.liquidGlass
 import com.kazaf.mirrorbackup.ui.theme.MiuiColors
 
-/**
- * 液态玻璃卡片：半透明表面 + 渐变描边 + 顶部高光 + 柔和投影，
- * 光影效果随系统深浅色主题自动调整。
- */
+/** 液态玻璃状态注入（由 MainActivity 的玻璃宿主提供） */
+val LocalLiquidGlassState = staticCompositionLocalOf<LiquidGlassState?> { null }
+
+/** 液态玻璃卡片：背景折射 + 镜面高光 + 渐变边缘光（iOS 27 风格） */
 @Composable
 fun LiquidGlassCard(
     modifier: Modifier = Modifier,
     corner: Dp = 22.dp,
+    tintAlpha: Float = 0.52f,
+    specular: Color = Color.White,
     content: @Composable ColumnScope.() -> Unit
 ) {
-    val cs = MaterialTheme.colorScheme
+    val glass = LocalLiquidGlassState.current
     val dark = isSystemInDarkTheme()
     val shape = RoundedCornerShape(corner)
-    Surface(
-        modifier = modifier.shadow(
-            elevation = 14.dp,
-            shape = shape,
-            spotColor = Color.Black.copy(alpha = if (dark) 0.35f else 0.10f)
-        ),
-        shape = shape,
-        color = Color.Transparent
-    ) {
-        Box {
-            // 玻璃底
-            Box(
-                Modifier
-                    .matchParentSize()
-                    .background(cs.surface.copy(alpha = if (dark) 0.72f else 0.66f), shape)
-            )
-            // 渐变描边
-            Box(
-                Modifier
-                    .matchParentSize()
-                    .border(
-                        1.dp,
-                        Brush.linearGradient(
-                            listOf(
-                                Color.White.copy(alpha = if (dark) 0.18f else 0.85f),
-                                Color.White.copy(alpha = 0.03f),
-                                Color.White.copy(alpha = if (dark) 0.08f else 0.45f)
-                            )
-                        ),
-                        shape
-                    )
-            )
-            // 顶部高光
-            Box(
-                Modifier
-                    .matchParentSize()
-                    .background(
-                        Brush.verticalGradient(
-                            listOf(
-                                Color.White.copy(alpha = if (dark) 0.05f else 0.13f),
-                                Color.Transparent
-                            )
-                        ),
-                        shape
-                    )
-            )
+    val m = modifier.shadow(
+        16.dp, shape,
+        spotColor = Color.Black.copy(alpha = if (dark) 0.4f else 0.12f)
+    )
+    if (glass != null) {
+        Box(m.liquidGlass(glass, shape, tintAlpha, specular, dark, corner)) {
+            Column(Modifier.padding(16.dp), content = content)
+        }
+    } else {
+        Surface(
+            m, shape = shape,
+            color = MaterialTheme.colorScheme.surface.copy(alpha = if (dark) 0.72f else 0.8f),
+            border = BorderStroke(1.dp, Color.White.copy(alpha = if (dark) 0.15f else 0.5f))
+        ) {
             Column(Modifier.padding(16.dp), content = content)
         }
     }
@@ -136,43 +114,43 @@ fun SectionTitle(text: String) {
     )
 }
 
-/** 悬浮操作栏：悬浮于内容之上，玻璃质感 + 主色光晕投影 */
+/** 悬浮操作栏（液态玻璃 + 主色光晕投影） */
 @Composable
 fun FloatingDock(
     modifier: Modifier = Modifier,
     content: @Composable RowScope.() -> Unit
 ) {
-    val cs = MaterialTheme.colorScheme
+    val glass = LocalLiquidGlassState.current
     val dark = isSystemInDarkTheme()
+    val cs = MaterialTheme.colorScheme
     val shape = RoundedCornerShape(26.dp)
-    Surface(
-        modifier = modifier.shadow(
-            elevation = 18.dp,
-            shape = shape,
-            spotColor = cs.primary.copy(alpha = 0.20f),
-            ambientColor = Color.Black.copy(alpha = if (dark) 0.4f else 0.12f)
-        ),
-        shape = shape,
-        color = cs.surface.copy(alpha = if (dark) 0.86f else 0.92f),
-        border = BorderStroke(
-            1.dp,
-            Brush.linearGradient(
-                listOf(
-                    Color.White.copy(alpha = if (dark) 0.22f else 0.9f),
-                    Color.White.copy(alpha = 0.04f),
-                    Color.White.copy(alpha = if (dark) 0.10f else 0.5f)
-                )
+    val m = modifier.shadow(
+        20.dp, shape,
+        spotColor = cs.primary.copy(alpha = 0.22f),
+        ambientColor = Color.Black.copy(alpha = if (dark) 0.4f else 0.12f)
+    )
+    if (glass != null) {
+        Box(m.liquidGlass(glass, shape, 0.62f, Color.White, dark, 26.dp)) {
+            Row(
+                Modifier
+                    .padding(10.dp)
+                    .defaultMinSize(minHeight = 54.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                content = content
             )
-        )
-    ) {
-        Row(
-            Modifier
-                .padding(10.dp)
-                .defaultMinSize(minHeight = 54.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-            content = content
-        )
+        }
+    } else {
+        Surface(m, shape = shape, color = cs.surface.copy(alpha = if (dark) 0.88f else 0.94f)) {
+            Row(
+                Modifier
+                    .padding(10.dp)
+                    .defaultMinSize(minHeight = 54.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                content = content
+            )
+        }
     }
 }
 
@@ -234,14 +212,16 @@ fun TerminalLog(
     LaunchedEffect(lines.size) {
         if (lines.isNotEmpty()) listState.scrollToItem(lines.size - 1)
     }
+    val dark = isSystemInDarkTheme()
     Surface(
-        modifier = modifier.height(height),
+        modifier = modifier
+            .height(height)
+            .shadow(14.dp, RoundedCornerShape(18.dp), spotColor = Color.Black.copy(alpha = if (dark) 0.5f else 0.15f)),
         shape = RoundedCornerShape(18.dp),
         color = MiuiColors.TerminalBg,
-        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.08f))
+        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.1f))
     ) {
         Column {
-            // 标题栏（信号灯风格）
             Row(
                 Modifier
                     .fillMaxWidth()
@@ -306,34 +286,36 @@ private fun TerminalDot(color: Color) {
     )
 }
 
-/** 双 Tab 分段导航（玻璃悬浮） */
+/** 液态玻璃分段导航（支持任意数量 Tab） */
 @Composable
 fun SegmentedTab(
+    items: List<String>,
     selected: Int,
     onSelect: (Int) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val cs = MaterialTheme.colorScheme
+    val glass = LocalLiquidGlassState.current
     val dark = isSystemInDarkTheme()
-    Surface(
-        modifier = modifier
-            .fillMaxWidth()
-            .shadow(10.dp, RoundedCornerShape(18.dp), spotColor = cs.primary.copy(alpha = 0.15f)),
-        shape = RoundedCornerShape(18.dp),
-        color = cs.surface.copy(alpha = if (dark) 0.8f else 0.9f),
-        border = BorderStroke(
-            1.dp,
-            Brush.linearGradient(
-                listOf(
-                    Color.White.copy(alpha = if (dark) 0.18f else 0.8f),
-                    Color.White.copy(alpha = 0.04f)
-                )
-            )
-        )
-    ) {
-        Row(Modifier.padding(4.dp)) {
-            TabItem("📤 备份工作台", 0, selected, onSelect, Modifier.weight(1f))
-            TabItem("📥 恢复工作台", 1, selected, onSelect, Modifier.weight(1f))
+    val cs = MaterialTheme.colorScheme
+    val shape = RoundedCornerShape(18.dp)
+    val m = modifier
+        .fillMaxWidth()
+        .shadow(12.dp, shape, spotColor = cs.primary.copy(alpha = 0.16f))
+    if (glass != null) {
+        Box(m.liquidGlass(glass, shape, 0.5f, Color.White, dark, 18.dp)) {
+            Row(Modifier.padding(4.dp)) {
+                items.forEachIndexed { index, text ->
+                    TabItem(text, index, selected, onSelect, Modifier.weight(1f))
+                }
+            }
+        }
+    } else {
+        Surface(m, shape = shape, color = cs.surface.copy(alpha = if (dark) 0.8f else 0.9f)) {
+            Row(Modifier.padding(4.dp)) {
+                items.forEachIndexed { index, text ->
+                    TabItem(text, index, selected, onSelect, Modifier.weight(1f))
+                }
+            }
         }
     }
 }
@@ -347,16 +329,20 @@ private fun TabItem(
     modifier: Modifier
 ) {
     val cs = MaterialTheme.colorScheme
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    val scale by animateFloatAsState(if (pressed) 0.96f else 1f, spring(), label = "tab")
     Surface(
         onClick = { onSelect(index) },
-        modifier = modifier,
+        modifier = modifier.graphicsLayer { scaleX = scale; scaleY = scale },
+        interactionSource = interaction,
         shape = RoundedCornerShape(14.dp),
         color = if (selected == index) cs.primary else Color.Transparent
     ) {
         Box(Modifier.padding(vertical = 10.dp), contentAlignment = Alignment.Center) {
             Text(
                 text = text,
-                fontSize = 14.sp,
+                fontSize = 13.sp,
                 fontWeight = if (selected == index) FontWeight.Bold else FontWeight.Normal,
                 color = if (selected == index) Color.White else cs.onSurfaceVariant
             )
@@ -364,7 +350,7 @@ private fun TabItem(
     }
 }
 
-/** 主按钮（MIUI 风格圆角，支持危险红色态） */
+/** 主按钮（渐变玻璃质感 + 按压回弹） */
 @Composable
 fun MiuiButton(
     text: String,
@@ -375,10 +361,16 @@ fun MiuiButton(
 ) {
     val cs = MaterialTheme.colorScheme
     val bg = if (danger) MiuiColors.Red else cs.primary
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    val scale by animateFloatAsState(if (pressed) 0.97f else 1f, spring(), label = "btn")
     Button(
         onClick = onClick,
-        modifier = modifier.height(48.dp),
+        modifier = modifier
+            .height(48.dp)
+            .graphicsLayer { scaleX = scale; scaleY = scale },
         enabled = enabled,
+        interactionSource = interaction,
         shape = RoundedCornerShape(16.dp),
         colors = ButtonDefaults.buttonColors(
             containerColor = bg,
@@ -387,7 +379,7 @@ fun MiuiButton(
             disabledContentColor = Color.White.copy(alpha = 0.8f)
         ),
         elevation = ButtonDefaults.buttonElevation(
-            defaultElevation = 4.dp,
+            defaultElevation = 5.dp,
             pressedElevation = 1.dp
         )
     ) {
@@ -395,7 +387,7 @@ fun MiuiButton(
     }
 }
 
-/** 状态徽章 */
+/** 状态徽章（玻璃胶囊） */
 @Composable
 fun StatusBadge(text: String, color: Color, modifier: Modifier = Modifier) {
     Surface(
@@ -414,7 +406,7 @@ fun StatusBadge(text: String, color: Color, modifier: Modifier = Modifier) {
     }
 }
 
-/** 备份模式选择卡片（2×2 网格单元） */
+/** 备份模式选择卡片（2×2 网格单元，玻璃 + 按压回弹） */
 @Composable
 fun ModeCard(
     selected: Boolean,
@@ -425,55 +417,95 @@ fun ModeCard(
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val glass = LocalLiquidGlassState.current
+    val dark = isSystemInDarkTheme()
     val cs = MaterialTheme.colorScheme
     val shape = RoundedCornerShape(20.dp)
-    Surface(
-        onClick = onClick,
-        modifier = modifier.shadow(
-            if (selected) 10.dp else 3.dp,
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    val scale by animateFloatAsState(if (pressed) 0.965f else 1f, spring(), label = "mode")
+    val m = modifier
+        .graphicsLayer { scaleX = scale; scaleY = scale }
+        .shadow(
+            if (selected) 12.dp else 4.dp,
             shape,
-            spotColor = accent.copy(alpha = 0.25f)
-        ),
-        shape = shape,
-        color = if (selected) accent.copy(alpha = 0.14f) else cs.surface.copy(alpha = 0.7f),
-        border = BorderStroke(
-            if (selected) 1.8.dp else 1.dp,
-            if (selected) accent else cs.outline.copy(alpha = 0.35f)
+            spotColor = accent.copy(alpha = 0.3f)
         )
-    ) {
+        .clickable(interactionSource = interaction, indication = null, onClick = onClick)
+
+    if (glass != null) {
+        Box(
+            m.liquidGlass(
+                glass, shape,
+                tintAlpha = if (selected) 0.6f else 0.42f,
+                specular = if (selected) accent else Color.White,
+                dark = dark,
+                corner = 20.dp
+            )
+        ) {
+            ModeCardContent(selected, emoji, title, desc, accent, cs)
+        }
+    } else {
+        Surface(
+            m, shape = shape,
+            color = if (selected) accent.copy(alpha = 0.14f) else cs.surface.copy(alpha = 0.7f),
+            border = BorderStroke(if (selected) 1.8.dp else 1.dp, if (selected) accent else cs.outline.copy(alpha = 0.35f))
+        ) {
+            ModeCardContent(selected, emoji, title, desc, accent, cs)
+        }
+    }
+}
+
+@Composable
+private fun ModeCardContent(
+    selected: Boolean,
+    emoji: String,
+    title: String,
+    desc: String,
+    accent: Color,
+    cs: androidx.compose.material3.ColorScheme
+) {
+    Box {
+        if (selected) {
+            Box(
+                Modifier
+                    .matchParentSize()
+                    .background(accent.copy(alpha = 0.10f))
+            )
+        }
         Box(Modifier.padding(14.dp)) {
-            if (selected) {
-                Surface(
-                    shape = CircleShape,
-                    color = accent,
-                    modifier = Modifier.align(Alignment.TopEnd)
-                ) {
-                    Text(
-                        "✓",
-                        color = Color.White,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
-                    )
-                }
-            }
-            Column {
-                Text(emoji, fontSize = 24.sp)
+        if (selected) {
+            Surface(
+                shape = CircleShape,
+                color = accent,
+                modifier = Modifier.align(Alignment.TopEnd)
+            ) {
                 Text(
-                    text = title,
-                    modifier = Modifier.padding(top = 8.dp),
-                    fontSize = 14.sp,
+                    "✓",
+                    color = Color.White,
+                    fontSize = 10.sp,
                     fontWeight = FontWeight.Bold,
-                    color = if (selected) accent else cs.onSurface
-                )
-                Text(
-                    text = desc,
-                    modifier = Modifier.padding(top = 3.dp),
-                    fontSize = 11.sp,
-                    lineHeight = 15.sp,
-                    color = cs.onSurfaceVariant
+                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
                 )
             }
+        }
+        Column {
+            Text(emoji, fontSize = 24.sp)
+            Text(
+                text = title,
+                modifier = Modifier.padding(top = 8.dp),
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold,
+                color = if (selected) accent else cs.onSurface
+            )
+            Text(
+                text = desc,
+                modifier = Modifier.padding(top = 3.dp),
+                fontSize = 11.sp,
+                lineHeight = 15.sp,
+                color = cs.onSurfaceVariant
+            )
+        }
         }
     }
 }
@@ -487,28 +519,57 @@ fun FormatChip(
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val glass = LocalLiquidGlassState.current
+    val dark = isSystemInDarkTheme()
     val cs = MaterialTheme.colorScheme
-    Surface(
-        onClick = onClick,
-        modifier = modifier,
-        shape = RoundedCornerShape(14.dp),
-        color = if (selected) cs.primary.copy(alpha = 0.10f) else cs.surface.copy(alpha = 0.8f),
-        border = BorderStroke(
-            if (selected) 1.5.dp else 1.dp,
-            if (selected) cs.primary else cs.outline.copy(alpha = 0.4f)
-        )
-    ) {
-        Column(
-            Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Text(
-                title,
-                fontSize = 13.sp,
-                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-                color = if (selected) cs.primary else cs.onSurface
+    val shape = RoundedCornerShape(14.dp)
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    val scale by animateFloatAsState(if (pressed) 0.96f else 1f, spring(), label = "chip")
+    val m = modifier
+        .graphicsLayer { scaleX = scale; scaleY = scale }
+        .clickable(interactionSource = interaction, indication = null, onClick = onClick)
+    if (glass != null) {
+        Box(
+            m.liquidGlass(
+                glass, shape,
+                tintAlpha = if (selected) 0.55f else 0.38f,
+                specular = if (selected) cs.primary else Color.White,
+                dark = dark,
+                corner = 14.dp
             )
-            Text(desc, fontSize = 10.sp, color = cs.onSurfaceVariant)
+        ) {
+            Column(
+                Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    title,
+                    fontSize = 13.sp,
+                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                    color = if (selected) cs.primary else cs.onSurface
+                )
+                Text(desc, fontSize = 10.sp, color = cs.onSurfaceVariant)
+            }
+        }
+    } else {
+        Surface(
+            m, shape = shape,
+            color = if (selected) cs.primary.copy(alpha = 0.10f) else cs.surface.copy(alpha = 0.8f),
+            border = BorderStroke(if (selected) 1.5.dp else 1.dp, if (selected) cs.primary else cs.outline.copy(alpha = 0.4f))
+        ) {
+            Column(
+                Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    title,
+                    fontSize = 13.sp,
+                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                    color = if (selected) cs.primary else cs.onSurface
+                )
+                Text(desc, fontSize = 10.sp, color = cs.onSurfaceVariant)
+            }
         }
     }
 }

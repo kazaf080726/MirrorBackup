@@ -17,6 +17,7 @@ import com.kazaf.mirrorbackup.core.PartitionScanner
 import com.kazaf.mirrorbackup.core.RecordsStore
 import com.kazaf.mirrorbackup.core.SuManager
 import com.kazaf.mirrorbackup.core.ThreadMode
+import com.kazaf.mirrorbackup.core.UserBlacklist
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -53,27 +54,34 @@ class BackupViewModel(app: Application) : AndroidViewModel(app) {
     var records by mutableStateOf<List<BackupRecord>>(emptyList())
         private set
 
+    /** 用户自主黑名单（默认空 —— 应用不做任何隐性排除） */
+    var userBlacklist by mutableStateOf<Set<String>>(emptySet())
+        private set
+
     private var manualPresetDone = false
 
     val rootOk: Boolean
         get() = rootCheck?.rootOk == true
 
     val manualPartitions: List<PartitionInfo>
-        get() = partitions.filterNot { PartitionRules.isBlacklisted(it.name) }
+        get() = partitions.filterNot { it.name in userBlacklist }
 
     val selectedTargets: List<PartitionInfo>
         get() = breakdown.targets
 
-    /** 模式排除明细（扫描总数 / 黑名单 / super / 大容量 / 目标） */
+    /** 模式排除明细（扫描总数 / 用户黑名单 / super / 大容量 / 目标） */
     val breakdown: PartitionRules.ModeBreakdown
-        get() = PartitionRules.analyze(partitions, mode, manualSelection)
+        get() = PartitionRules.analyze(partitions, mode, manualSelection, userBlacklist)
 
     fun chooseMode(m: BackupMode) {
-        if (!running) mode = m
+        if (!running) {
+            mode = m
+            log.info("已切换备份模式: ${m.label}")
+        }
     }
 
     fun toggleManual(name: String, on: Boolean) {
-        if (!running && !PartitionRules.isBlacklisted(name)) {
+        if (!running && name !in userBlacklist) {
             manualSelection = if (on) manualSelection + name else manualSelection - name
         }
     }
@@ -85,28 +93,47 @@ class BackupViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun chooseThreadMode(t: ThreadMode) {
-        if (!running) threadMode = t
+        if (!running) {
+            threadMode = t
+            log.info("已切换线程模式: ${t.label}")
+        }
     }
 
     fun chooseSparse(s: Boolean) {
-        if (!running) sparse = s
+        if (!running) {
+            sparse = s
+            log.info("已切换镜像格式: ${if (s) "SPARSE 稀疏镜像" else "RAW 原始镜像"}")
+        }
+    }
+
+    /** 用户自主黑名单：加/删（所有排除行为完全由用户决定） */
+    fun toggleBlacklist(name: String) {
+        val next = UserBlacklist.toggle(getApplication(), name)
+        userBlacklist = next
+        if (name in next) manualSelection = manualSelection - name
+    }
+
+    fun syncBlacklist() {
+        userBlacklist = UserBlacklist.load(getApplication())
     }
 
     /** 检测 ROOT（支持 Magisk/KernelSU/APatch 分支）并枚举分区 */
     fun refreshEnvironment() {
         viewModelScope.launch {
-            val (check, parts, recs) = withContext(Dispatchers.IO) {
+            val (check, parts, recs, bl) = withContext(Dispatchers.IO) {
                 val c = su.checkRoot()
                 val p = if (c.rootOk) PartitionScanner.scan(su, log) else emptyList()
                 val r = RecordsStore.load(getApplication())
-                Triple(c, p, r)
+                val b = UserBlacklist.load(getApplication())
+                Quad(c, p, r, b)
             }
             rootCheck = check
             partitions = parts
+            userBlacklist = bl
             if (check.rootOk) {
-                val black = parts.count { PartitionRules.isBlacklisted(it.name) }
+                val black = parts.count { it.name in bl }
                 log.info("✅ su 可用: ${check.path}（${check.detail}）")
-                log.info("✅ 扫描完成: /dev/block/by-name 共 ${parts.size} 个分区，其中黑名单 $black 个按安全规则排除")
+                log.info("✅ 扫描完成: /dev/block/by-name 共 ${parts.size} 个分区（你的黑名单 $black 个，可自行增删）")
             } else {
                 log.warn("⚠ ROOT 校验失败: ${check.detail}（请在 KernelSU/Magisk/APatch 管理器授权后点击右上角状态重新检测）")
             }
@@ -130,7 +157,7 @@ class BackupViewModel(app: Application) : AndroidViewModel(app) {
         running = true
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                engine.run(mode, manualSelection, threadMode, sparse)
+                engine.run(mode, manualSelection, threadMode, sparse, userBlacklist)
             } finally {
                 withContext(Dispatchers.Main) {
                     running = false
@@ -152,4 +179,6 @@ class BackupViewModel(app: Application) : AndroidViewModel(app) {
     fun stop() {
         engine.cancelled = true
     }
+
+    private data class Quad<A, B, C, D>(val a: A, val b: B, val c: C, val d: D)
 }
