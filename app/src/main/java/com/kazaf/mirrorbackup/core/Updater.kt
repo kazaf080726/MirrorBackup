@@ -236,7 +236,7 @@ object ModuleHelper {
                 ?.substringAfter('=')?.trim() ?: ""
             val code = text.lines().firstOrNull { it.startsWith("versionCode=") }
                 ?.substringAfter('=')?.trim()?.toIntOrNull() ?: 0
-            val bin = su.exec("command -v img2simg 2>/dev/null", 8_000)
+            val bin = su.exec("command -v img2simg 2>/dev/null && command -v mb_dd 2>/dev/null", 8_000)
                 .stdout.trim().startsWith("/")
             ModuleStatus(true, version, code, bin)
         } catch (e: Exception) {

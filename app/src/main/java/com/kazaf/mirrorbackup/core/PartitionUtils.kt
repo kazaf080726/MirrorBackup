@@ -100,9 +100,27 @@ object PartitionScanner {
 
     /**
      * 枚举 /dev/block/by-name 下所有分区。
-     * 输出格式：名称|真实节点路径|扇区数（512B/扇区）。
+     * 优先使用提取辅助模块的 mb_parts 原生二进制（单进程极速枚举），
+     * 未安装模块时回退 shell 脚本。
      */
     fun scan(su: SuManager, log: LogBuffer): List<PartitionInfo> {
+        // 模块二进制优先
+        val hasMbParts = try {
+            su.exec("command -v mb_parts 2>/dev/null", 8_000).stdout.trim().startsWith("/")
+        } catch (e: Exception) {
+            false
+        }
+        if (hasMbParts) {
+            val r = su.exec("mb_parts", 20_000)
+            if (r.exitCode == 0) {
+                val parts = parse(r.stdout)
+                if (parts.isNotEmpty()) {
+                    log.info("⚡ 分区枚举（提取辅助模块 mb_parts）: ${parts.size} 个")
+                    return parts
+                }
+            }
+            log.warn("mb_parts 执行异常，回退 shell 枚举: ${r.stderr.take(100)}")
+        }
         for (dir in BY_NAME_DIRS) {
             val script = buildString {
                 append("found=0; for d in $dir; do ")

@@ -1,6 +1,27 @@
 # 更新日志
 
-## App v2.1.0 / 模块 v1.0.0（2026-10）
+## App v2.2.0 / 模块 v1.1.0（2026-10）
+
+### 🎨 主题设置体系（照搬 KernelSU / SukiSU 管理器）
+- Theme 颜色模式：跟随系统 / 浅色 / 深色 / AMOLED 黑
+- 启用 Monet 配色（Material You 动态取色，Android 12+）
+- Key color：15 色强调色板 + 自定义色调滑块（关闭 Monet 时生效）
+- 液态玻璃：总开关 + 强度（弱/中/强）+ 透明度 + 镜面高光强度（双重高光：主光 + 斜向次光，对齐 SukiSU AGSL 着色器效果）
+- 圆角大小：14 / 18 / 22 / 28；背景光晕开关
+- 全部设置即时生效并持久化
+
+### 🧩 提取辅助模块 v1.1.0（二次升级）
+- 新增 mb_parts：单进程极速分区枚举（realpath 解析多层符号链接，102/102 无遗漏）
+- 新增 mb_dd：单进程 dd + 内置 SHA-256 实时哈希（替代 shell 管道链，更快更稳）
+- 保留 img2simg / simg2img（AOSP libsparse）
+- App 检测到模块后自动优先使用 mb_parts 扫描与 mb_dd 提取
+- update.json 同步至 v1.1.0-110，可在管理器内直接升级
+
+### 修复
+- mb_parts 对 dm-mapper 分区（by-name → mapper → dm-N 多层链接）尺寸解析
+
+## App v2.1.x / 模块 v1.0.0
+- iOS 27 液态玻璃（预渲染软件模糊）、用户自主黑名单、应用内检查更新/一键升级（只装一次）、提取辅助模块 v1.0.0
 
 ### 🎨 iOS 27 液态玻璃重构
 - 真实背景折射（GraphicsLayer + RenderEffect 实时高斯模糊快照）+ 镜面高光 + 渐变边缘光

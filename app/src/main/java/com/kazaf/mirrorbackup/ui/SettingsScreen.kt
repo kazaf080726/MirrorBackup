@@ -1,5 +1,7 @@
 package com.kazaf.mirrorbackup.ui
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -10,28 +12,41 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Slider
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.kazaf.mirrorbackup.core.AccentPresets
 import com.kazaf.mirrorbackup.core.DISCLAIMER_TEXT
 import com.kazaf.mirrorbackup.core.PartitionRules
+import com.kazaf.mirrorbackup.core.ThemeConfig
+import com.kazaf.mirrorbackup.core.ThemeState
 import com.kazaf.mirrorbackup.core.fmtSize
 import com.kazaf.mirrorbackup.ui.components.CircularProgressRing
 import com.kazaf.mirrorbackup.ui.components.LiquidGlassCard
@@ -67,6 +82,9 @@ fun SettingsScreen(settingsVm: SettingsViewModel, backupVm: BackupViewModel) {
             .padding(horizontal = 16.dp)
     ) {
         Spacer(Modifier.height(4.dp))
+
+        // ── 主题与外观（照搬 KernelSU / SukiSU 管理器主题设置） ──
+        ThemeSection()
 
         // ── 版本与更新 ──
         LiquidGlassCard(Modifier.fillMaxWidth()) {
@@ -257,6 +275,198 @@ private fun InfoLine(label: String, value: String) {
             fontWeight = FontWeight.Medium,
             color = MaterialTheme.colorScheme.onSurface,
             fontFamily = if (value.length > 24) FontFamily.Monospace else FontFamily.Default
+        )
+    }
+}
+
+/** 🎨 主题与外观 —— 照搬 KernelSU / SukiSU 管理器主题设置体系 */
+@Composable
+private fun ThemeSection() {
+    val context = LocalContext.current
+    val cfg = ThemeState.config
+    fun upd(t: ThemeConfig.() -> ThemeConfig) {
+        ThemeState.update(context, t)
+    }
+    val cs = MaterialTheme.colorScheme
+
+    LiquidGlassCard(Modifier.fillMaxWidth()) {
+        SectionTitle("🎨 主题与外观")
+
+        // ── Theme：颜色模式 ──
+        Text("Theme（颜色模式）", fontSize = 12.sp, color = cs.onSurfaceVariant)
+        Spacer(Modifier.height(6.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            ThemeChip("跟随系统", cfg.colorMode == "system") { upd { copy(colorMode = "system") } }
+            ThemeChip("浅色", cfg.colorMode == "light") { upd { copy(colorMode = "light") } }
+            ThemeChip("深色", cfg.colorMode == "dark") { upd { copy(colorMode = "dark") } }
+            ThemeChip("AMOLED 黑", cfg.colorMode == "amoled") { upd { copy(colorMode = "amoled") } }
+        }
+        Spacer(Modifier.height(12.dp))
+
+        // ── Color Spec：Monet 动态取色 ──
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column {
+                Text("启用 Monet 配色", fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                Text(
+                    "Material You 动态取色（Android 12+）",
+                    fontSize = 10.sp,
+                    color = cs.onSurfaceVariant
+                )
+            }
+            Switch(
+                checked = cfg.monetEnabled,
+                onCheckedChange = { upd { copy(monetEnabled = it) } },
+                enabled = android.os.Build.VERSION.SDK_INT >= 31
+            )
+        }
+        Spacer(Modifier.height(10.dp))
+
+        // ── Key color：强调色板 + 自定义色调 ──
+        Text("Key color（强调色）", fontSize = 12.sp, color = cs.onSurfaceVariant)
+        Spacer(Modifier.height(6.dp))
+        AccentPresets.LIST.chunked(5).forEach { rowPresets ->
+            Row(
+                Modifier.padding(vertical = 4.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                rowPresets.forEach { preset ->
+                    val selected = !cfg.monetEnabled && cfg.accent == preset.argb
+                    Box(
+                        Modifier
+                            .size(30.dp)
+                            .clickable { upd { copy(monetEnabled = false, accent = preset.argb) } },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Box(
+                            Modifier
+                                .matchParentSize()
+                                .background(Color(preset.argb), CircleShape)
+                        )
+                        if (selected) {
+                            Box(
+                                Modifier
+                                    .matchParentSize()
+                                    .border(2.dp, cs.onSurface, CircleShape)
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        val hue = remember(cfg.accent) {
+            val hsv = FloatArray(3)
+            android.graphics.Color.colorToHSV(cfg.accent.toInt(), hsv)
+            hsv[0]
+        }
+        Text(
+            "自定义色调: ${"%.0f".format(hue)}°（Monet 关闭时生效）",
+            fontSize = 11.sp,
+            color = cs.onSurfaceVariant
+        )
+        Slider(
+            value = hue,
+            onValueChange = { h ->
+                val argb = android.graphics.Color.HSVToColor(floatArrayOf(h, 0.72f, 1.0f))
+                upd { copy(monetEnabled = false, accent = (0xFF000000L or (argb.toLong() and 0xFFFFFFL))) }
+            },
+            valueRange = 0f..360f
+        )
+        Spacer(Modifier.height(8.dp))
+
+        // ── 液态玻璃 ──
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text("液态玻璃", fontSize = 13.sp, fontWeight = FontWeight.Medium)
+            Switch(checked = cfg.glassEnabled, onCheckedChange = { upd { copy(glassEnabled = it) } })
+        }
+        if (cfg.glassEnabled) {
+            Text("玻璃强度（折射模糊半径）", fontSize = 11.sp, color = cs.onSurfaceVariant)
+            Spacer(Modifier.height(4.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ThemeChip("弱", cfg.glassStrength == 0) { upd { copy(glassStrength = 0) } }
+                ThemeChip("中", cfg.glassStrength == 1) { upd { copy(glassStrength = 1) } }
+                ThemeChip("强", cfg.glassStrength == 2) { upd { copy(glassStrength = 2) } }
+            }
+            Text(
+                "透明度 ${"%.0f".format(cfg.glassTintAlpha * 100)}%",
+                fontSize = 11.sp,
+                color = cs.onSurfaceVariant
+            )
+            Slider(
+                value = cfg.glassTintAlpha,
+                onValueChange = { upd { copy(glassTintAlpha = it) } },
+                valueRange = 0.30f..0.72f
+            )
+            Text(
+                "镜面高光 ${"%.0f".format(cfg.specularStrength * 100)}%",
+                fontSize = 11.sp,
+                color = cs.onSurfaceVariant
+            )
+            Slider(
+                value = cfg.specularStrength,
+                onValueChange = { upd { copy(specularStrength = it) } },
+                valueRange = 0.3f..1.6f
+            )
+        }
+        Spacer(Modifier.height(8.dp))
+
+        // ── 圆角大小 ──
+        Text("圆角大小", fontSize = 11.sp, color = cs.onSurfaceVariant)
+        Spacer(Modifier.height(4.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            ThemeChip("14", cfg.cornerRadius == 14) { upd { copy(cornerRadius = 14) } }
+            ThemeChip("18", cfg.cornerRadius == 18) { upd { copy(cornerRadius = 18) } }
+            ThemeChip("22", cfg.cornerRadius == 22) { upd { copy(cornerRadius = 22) } }
+            ThemeChip("28", cfg.cornerRadius == 28) { upd { copy(cornerRadius = 28) } }
+        }
+        Spacer(Modifier.height(10.dp))
+
+        // ── 背景光晕 ──
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column {
+                Text("背景光晕", fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                Text("蓝紫渐变光斑呼吸动画", fontSize = 10.sp, color = cs.onSurfaceVariant)
+            }
+            Switch(checked = cfg.glowEnabled, onCheckedChange = { upd { copy(glowEnabled = it) } })
+        }
+    }
+    Spacer(Modifier.height(12.dp))
+}
+
+@Composable
+private fun ThemeChip(label: String, selected: Boolean, onClick: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    Box(
+        Modifier
+            .clickable(onClick = onClick)
+            .background(
+                if (selected) cs.primary.copy(alpha = 0.16f) else cs.surface.copy(alpha = 0.6f),
+                RoundedCornerShape(999.dp)
+            )
+            .border(
+                1.dp,
+                if (selected) cs.primary else cs.outline.copy(alpha = 0.4f),
+                RoundedCornerShape(999.dp)
+            )
+            .padding(horizontal = 12.dp, vertical = 6.dp)
+    ) {
+        Text(
+            label,
+            fontSize = 12.sp,
+            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+            color = if (selected) cs.primary else cs.onSurfaceVariant
         )
     }
 }

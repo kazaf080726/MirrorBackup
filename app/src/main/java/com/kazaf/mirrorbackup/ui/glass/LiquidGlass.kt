@@ -55,10 +55,16 @@ class LiquidGlassState {
     /** 背景位图缩小倍数（越大越省，模糊等效半径越大） */
     val blurScale: Int = 8
 
+    /** 盒式模糊半径（位图尺度像素，实际等效半径 = blurPx × blurScale） */
+    @Volatile
+    var blurPx: Int = 4
+
     var darkTint: Color = Color(0xFF12161E)
     var lightTint: Color = Color(0xFFF6F9FF)
 
     private var lastDark: Boolean? = null
+    private var lastBlurPx: Int = -1
+    private var lastDensity: Float = 0f
 
     /** 预渲染模糊背景（纯 android.graphics，主线程执行仅数毫秒） */
     fun rebuildBackdrop(widthPx: Int, heightPx: Int, dark: Boolean, density: Float) {
@@ -104,19 +110,30 @@ class LiquidGlassState {
             ((glowAlpha * 3 / 5) shl 24) or 0x00B578
         )
 
-        // 3. 软件盒式模糊（两轮，半径 2）
-        boxBlur(bmp, 2)
-        boxBlur(bmp, 2)
+        // 3. 软件盒式模糊（两轮，半径随主题强度）
+        boxBlur(bmp, blurPx)
+        boxBlur(bmp, blurPx)
         backdrop = bmp.asImageBitmap()
         lastDark = dark
+        lastBlurPx = blurPx
+        lastDensity = density
     }
 
     fun ensureBackdrop(widthPx: Int, heightPx: Int, dark: Boolean, density: Float) {
-        if (backdrop == null || lastDark != dark ||
+        if (backdrop == null || lastDark != dark || lastBlurPx != blurPx ||
             hostSize.width != widthPx || hostSize.height != heightPx
         ) {
             hostSize = IntSize(widthPx, heightPx)
             rebuildBackdrop(widthPx, heightPx, dark, density)
+        }
+    }
+
+    /** 主题强度变化时由外部调用重建快照 */
+    fun refreshBackdrop() {
+        val sz = hostSize
+        val dk = lastDark ?: return
+        if (sz.width > 0 && sz.height > 0 && lastDensity > 0f) {
+            rebuildBackdrop(sz.width, sz.height, dk, lastDensity)
         }
     }
 
@@ -183,6 +200,7 @@ private class LiquidGlassNodeElement(
     val shape: Shape,
     val tintAlpha: Float,
     val specular: Color,
+    val specularStrength: Float,
     val dark: Boolean,
     val corner: Dp
 ) : ModifierNodeElement<LiquidGlassDrawNode>() {
@@ -191,13 +209,15 @@ private class LiquidGlassNodeElement(
     var node: LiquidGlassDrawNode? = null
 
     override fun create(): LiquidGlassDrawNode =
-        LiquidGlassDrawNode(state, shape, tintAlpha, specular, dark, corner).also { node = it }
+        LiquidGlassDrawNode(state, shape, tintAlpha, specular, specularStrength, dark, corner)
+            .also { node = it }
 
     override fun update(n: LiquidGlassDrawNode) {
         n.state = state
         n.shape = shape
         n.tintAlpha = tintAlpha
         n.specular = specular
+        n.specularStrength = specularStrength
         n.dark = dark
         n.corner = corner
     }
@@ -207,6 +227,7 @@ private class LiquidGlassNodeElement(
         h = 31 * h + shape.hashCode()
         h = 31 * h + tintAlpha.hashCode()
         h = 31 * h + specular.hashCode()
+        h = 31 * h + specularStrength.hashCode()
         h = 31 * h + dark.hashCode()
         h = 31 * h + corner.hashCode()
         return h
@@ -217,6 +238,7 @@ private class LiquidGlassNodeElement(
         if (other !is LiquidGlassNodeElement) return false
         return state === other.state && shape == other.shape &&
             tintAlpha == other.tintAlpha && specular == other.specular &&
+            specularStrength == other.specularStrength &&
             dark == other.dark && corner == other.corner
     }
 }
@@ -226,6 +248,7 @@ private class LiquidGlassDrawNode(
     var shape: Shape,
     var tintAlpha: Float,
     var specular: Color,
+    var specularStrength: Float,
     var dark: Boolean,
     var corner: Dp
 ) : androidx.compose.ui.Modifier.Node(), DrawModifierNode {
@@ -272,15 +295,30 @@ private class LiquidGlassDrawNode(
             }
         }
 
-        // 2. 半透明玻璃基色 + 3. 顶部镜面高光
+        // 2. 半透明玻璃基色 + 3. 双重镜面高光（对齐 SukiSU 液态玻璃着色器：顶部主光 + 斜向次光）
         val glass = if (dark) state.darkTint else state.lightTint
+        val s = specularStrength
         clipPath(path) {
             drawRect(glass.copy(alpha = tintAlpha), topLeft = Offset.Zero, size = size)
+            // 主高光（顶部）
             drawRect(
                 brush = Brush.verticalGradient(
-                    0f to Color.White.copy(alpha = if (dark) 0.15f else 0.5f),
-                    0.3f to Color.White.copy(alpha = 0.05f),
+                    0f to Color.White.copy(alpha = (if (dark) 0.15f else 0.5f) * s),
+                    0.3f to Color.White.copy(alpha = 0.05f * s),
                     1f to Color.Transparent
+                ),
+                topLeft = Offset.Zero,
+                size = size
+            )
+            // 次高光（左上斜向光带，模拟着色器 lightDir2）
+            drawRect(
+                brush = Brush.linearGradient(
+                    colors = listOf(
+                        Color.White.copy(alpha = 0.22f * s),
+                        Color.White.copy(alpha = 0.0f)
+                    ),
+                    start = Offset.Zero,
+                    end = Offset(size.width * 0.55f, size.height * 0.18f)
                 ),
                 topLeft = Offset.Zero,
                 size = size
@@ -293,9 +331,9 @@ private class LiquidGlassDrawNode(
             path = path,
             brush = Brush.linearGradient(
                 listOf(
-                    specular.copy(alpha = if (dark) 0.4f else 0.9f),
+                    specular.copy(alpha = (if (dark) 0.4f else 0.9f) * s),
                     specular.copy(alpha = 0.08f),
-                    specular.copy(alpha = if (dark) 0.12f else 0.3f)
+                    specular.copy(alpha = (if (dark) 0.12f else 0.3f) * s)
                 )
             ),
             style = Stroke(width = stroke)
@@ -327,10 +365,11 @@ fun Modifier.liquidGlass(
     shape: Shape,
     tintAlpha: Float = 0.5f,
     specular: Color = Color.White,
+    specularStrength: Float = 1.0f,
     dark: Boolean = false,
     corner: Dp = 22.dp
 ): Modifier {
-    val element = LiquidGlassNodeElement(state, shape, tintAlpha, specular, dark, corner)
+    val element = LiquidGlassNodeElement(state, shape, tintAlpha, specular, specularStrength, dark, corner)
     return this
         .then(element)
         .onGloballyPositioned { element.node?.ownCoordinates = it }

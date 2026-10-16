@@ -51,10 +51,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.kazaf.mirrorbackup.core.ThemeState
 import com.kazaf.mirrorbackup.ui.BackupScreen
 import com.kazaf.mirrorbackup.ui.DisclaimerDialog
 import com.kazaf.mirrorbackup.ui.RestoreScreen
 import com.kazaf.mirrorbackup.ui.SettingsScreen
+import com.kazaf.mirrorbackup.ui.components.LocalGlassCorner
+import com.kazaf.mirrorbackup.ui.components.LocalGlassSpecular
+import com.kazaf.mirrorbackup.ui.components.LocalGlassTintAlpha
 import com.kazaf.mirrorbackup.ui.components.LocalLiquidGlassState
 import com.kazaf.mirrorbackup.ui.components.SegmentedTab
 import com.kazaf.mirrorbackup.ui.glass.liquidGlassHost
@@ -74,9 +78,15 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        ThemeState.init(applicationContext)
         enableEdgeToEdge()
         setContent {
-            MirrorBackupTheme {
+            val theme = ThemeState.config
+            MirrorBackupTheme(
+                colorMode = theme.colorMode,
+                monetEnabled = theme.monetEnabled,
+                accent = Color(theme.accent)
+            ) {
                 App()
             }
         }
@@ -114,18 +124,40 @@ private fun App() {
     val dark = isSystemInDarkTheme()
     val glass = rememberLiquidGlassState()
     val density = androidx.compose.ui.platform.LocalDensity.current.density
+    val themeCfg = ThemeState.config
+
+    // 应用玻璃参数（强度→位图模糊半径并重建背景快照）
+    LaunchedEffect(themeCfg.glassStrength) {
+        glass.blurPx = when (themeCfg.glassStrength) {
+            0 -> 1
+            1 -> 3
+            else -> 5
+        }
+        glass.refreshBackdrop()
+    }
+    val effectiveGlass = if (themeCfg.glassEnabled) glass else null
+    val glowEnabled = themeCfg.glowEnabled
 
     // 光影背景：渐变 + 缓慢呼吸的彩色光晕（有限循环后静止，兼顾省电与无障碍可读性）
-    val glowAlpha = remember { Animatable(0.12f) }
-    LaunchedEffect(Unit) {
-        repeat(7) {
-            glowAlpha.animateTo(0.24f, tween(6500, easing = LinearEasing))
-            glowAlpha.animateTo(0.12f, tween(6500, easing = LinearEasing))
+    val glowAlpha = remember { Animatable(if (glowEnabled) 0.12f else 0f) }
+    LaunchedEffect(glowEnabled) {
+        if (glowEnabled) {
+            repeat(7) {
+                glowAlpha.animateTo(0.24f, tween(6500, easing = LinearEasing))
+                glowAlpha.animateTo(0.12f, tween(6500, easing = LinearEasing))
+            }
+            glowAlpha.animateTo(0.16f, tween(1500))
+        } else {
+            glowAlpha.snapTo(0f)
         }
-        glowAlpha.animateTo(0.16f, tween(1500))
     }
 
-    CompositionLocalProvider(LocalLiquidGlassState provides glass) {
+    CompositionLocalProvider(
+        LocalLiquidGlassState provides effectiveGlass,
+        LocalGlassTintAlpha provides themeCfg.glassTintAlpha,
+        LocalGlassSpecular provides themeCfg.specularStrength,
+        LocalGlassCorner provides themeCfg.cornerRadius.dp
+    ) {
         Box(
             Modifier
                 .fillMaxSize()
@@ -140,41 +172,43 @@ private fun App() {
                 .liquidGlassHost(glass, dark, density)
                 .windowInsetsPadding(WindowInsets.safeDrawing)
         ) {
-            // 左上蓝色光晕
-            Box(
-                Modifier
-                    .size(320.dp)
-                    .offset(x = (-140).dp, y = (-120).dp)
-                    .graphicsLayer { alpha = glowAlpha.value }
-                    .background(
-                        Brush.radialGradient(listOf(MiuiColors.Blue.copy(alpha = 0.55f), Color.Transparent)),
-                        CircleShape
-                    )
-            )
-            // 右下紫色光晕
-            Box(
-                Modifier
-                    .size(360.dp)
-                    .align(Alignment.BottomEnd)
-                    .offset(x = 120.dp, y = 100.dp)
-                    .graphicsLayer { alpha = glowAlpha.value }
-                    .background(
-                        Brush.radialGradient(listOf(MiuiColors.Purple.copy(alpha = 0.45f), Color.Transparent)),
-                        CircleShape
-                    )
-            )
-            // 底部中央青色光晕
-            Box(
-                Modifier
-                    .size(300.dp)
-                    .align(Alignment.CenterStart)
-                    .offset(x = (-80).dp, y = 400.dp)
-                    .graphicsLayer { alpha = glowAlpha.value }
-                    .background(
-                        Brush.radialGradient(listOf(MiuiColors.Green.copy(alpha = 0.28f), Color.Transparent)),
-                        CircleShape
-                    )
-            )
+            if (glowEnabled) {
+                // 左上蓝色光晕
+                Box(
+                    Modifier
+                        .size(320.dp)
+                        .offset(x = (-140).dp, y = (-120).dp)
+                        .graphicsLayer { alpha = glowAlpha.value }
+                        .background(
+                            Brush.radialGradient(listOf(MiuiColors.Blue.copy(alpha = 0.55f), Color.Transparent)),
+                            CircleShape
+                        )
+                )
+                // 右下紫色光晕
+                Box(
+                    Modifier
+                        .size(360.dp)
+                        .align(Alignment.BottomEnd)
+                        .offset(x = 120.dp, y = 100.dp)
+                        .graphicsLayer { alpha = glowAlpha.value }
+                        .background(
+                            Brush.radialGradient(listOf(MiuiColors.Purple.copy(alpha = 0.45f), Color.Transparent)),
+                            CircleShape
+                        )
+                )
+                // 底部中央青色光晕
+                Box(
+                    Modifier
+                        .size(300.dp)
+                        .align(Alignment.CenterStart)
+                        .offset(x = (-80).dp, y = 400.dp)
+                        .graphicsLayer { alpha = glowAlpha.value }
+                        .background(
+                            Brush.radialGradient(listOf(MiuiColors.Green.copy(alpha = 0.28f), Color.Transparent)),
+                            CircleShape
+                        )
+                )
+            }
 
             Column(Modifier.fillMaxSize()) {
                 Header(backupVm)

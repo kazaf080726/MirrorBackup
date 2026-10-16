@@ -396,11 +396,25 @@ class BackupEngine(
         val src = "/dev/block/by-name/${part.name}"
         log.info("▶ [线程] 开始备份: ${part.name} (${fmtSize(part.sizeBytes)}) ← $src")
 
-        val pipeline = "set -o pipefail; " +
-            "dd if=${SuManager.quote(src)} bs=1048576 2>${SuManager.quote(errFile.absolutePath)} | " +
-            "tee ${SuManager.quote(rawFile.absolutePath)} | " +
-            "sha256sum | cut -d ' ' -f1 > ${SuManager.quote(hashFile.absolutePath)}"
-        val proc = su.open(pipeline)
+        // 优先使用提取辅助模块 mb_dd（单进程 dd + 内置 SHA-256，替代 shell 管道链）
+        val hasMbdd = try {
+            su.exec("command -v mb_dd 2>/dev/null", 8_000).stdout.trim().startsWith("/")
+        } catch (e: Exception) {
+            false
+        }
+        val proc = if (hasMbdd) {
+            log.info("   ⚡ 使用提取辅助模块 mb_dd（内置 SHA-256 实时哈希）")
+            su.open(
+                "umask 022; mb_dd if=${SuManager.quote(src)} of=${SuManager.quote(rawFile.absolutePath)} " +
+                    "bs=1048576 hash=${SuManager.quote(hashFile.absolutePath)} 2>${SuManager.quote(errFile.absolutePath)}"
+            )
+        } else {
+            val pipeline = "set -o pipefail; " +
+                "dd if=${SuManager.quote(src)} bs=1048576 2>${SuManager.quote(errFile.absolutePath)} | " +
+                "tee ${SuManager.quote(rawFile.absolutePath)} | " +
+                "sha256sum | cut -d ' ' -f1 > ${SuManager.quote(hashFile.absolutePath)}"
+            su.open(pipeline)
+        }
         var lastBytes = 0L
         var lastNanos = System.nanoTime()
         while (proc.isAlive()) {

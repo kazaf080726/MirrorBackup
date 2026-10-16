@@ -66,24 +66,40 @@ import com.kazaf.mirrorbackup.ui.theme.MiuiColors
 /** 液态玻璃状态注入（由 MainActivity 的玻璃宿主提供） */
 val LocalLiquidGlassState = staticCompositionLocalOf<LiquidGlassState?> { null }
 
-/** 液态玻璃卡片：背景折射 + 镜面高光 + 渐变边缘光（iOS 27 风格） */
+/** 主题：玻璃着色透明度（0.30~0.72） */
+val LocalGlassTintAlpha = staticCompositionLocalOf { 0.52f }
+
+/** 主题：镜面高光强度（0.3~1.6） */
+val LocalGlassSpecular = staticCompositionLocalOf { 1.0f }
+
+/** 主题：圆角基准值 */
+val LocalGlassCorner = staticCompositionLocalOf { 22.dp }
+
+/** 液态玻璃卡片：背景折射 + 镜面高光 + 渐变边缘光（iOS 27 风格，随主题配置） */
 @Composable
 fun LiquidGlassCard(
     modifier: Modifier = Modifier,
-    corner: Dp = 22.dp,
-    tintAlpha: Float = 0.52f,
+    corner: Dp? = null,
+    tintAlpha: Float? = null,
     specular: Color = Color.White,
     content: @Composable ColumnScope.() -> Unit
 ) {
     val glass = LocalLiquidGlassState.current
     val dark = isSystemInDarkTheme()
-    val shape = RoundedCornerShape(corner)
+    val resolvedCorner = corner ?: LocalGlassCorner.current
+    val resolvedTint = tintAlpha ?: LocalGlassTintAlpha.current
+    val specularStrength = LocalGlassSpecular.current
+    val shape = RoundedCornerShape(resolvedCorner)
     val m = modifier.shadow(
         16.dp, shape,
         spotColor = Color.Black.copy(alpha = if (dark) 0.4f else 0.12f)
     )
     if (glass != null) {
-        Box(m.liquidGlass(glass, shape, tintAlpha, specular, dark, corner)) {
+        Box(
+            m.liquidGlass(
+                glass, shape, resolvedTint, specular, specularStrength, dark, resolvedCorner
+            )
+        ) {
             Column(Modifier.padding(16.dp), content = content)
         }
     } else {
@@ -123,14 +139,19 @@ fun FloatingDock(
     val glass = LocalLiquidGlassState.current
     val dark = isSystemInDarkTheme()
     val cs = MaterialTheme.colorScheme
-    val shape = RoundedCornerShape(26.dp)
+    val shape = RoundedCornerShape(LocalGlassCorner.current + 4.dp)
     val m = modifier.shadow(
         20.dp, shape,
         spotColor = cs.primary.copy(alpha = 0.22f),
         ambientColor = Color.Black.copy(alpha = if (dark) 0.4f else 0.12f)
     )
     if (glass != null) {
-        Box(m.liquidGlass(glass, shape, 0.62f, Color.White, dark, 26.dp)) {
+        Box(
+            m.liquidGlass(
+                glass, shape, LocalGlassTintAlpha.current + 0.08f,
+                Color.White, LocalGlassSpecular.current, dark, LocalGlassCorner.current + 4.dp
+            )
+        ) {
             Row(
                 Modifier
                     .padding(10.dp)
@@ -297,12 +318,17 @@ fun SegmentedTab(
     val glass = LocalLiquidGlassState.current
     val dark = isSystemInDarkTheme()
     val cs = MaterialTheme.colorScheme
-    val shape = RoundedCornerShape(18.dp)
+    val shape = RoundedCornerShape(LocalGlassCorner.current - 4.dp)
     val m = modifier
         .fillMaxWidth()
         .shadow(12.dp, shape, spotColor = cs.primary.copy(alpha = 0.16f))
     if (glass != null) {
-        Box(m.liquidGlass(glass, shape, 0.5f, Color.White, dark, 18.dp)) {
+        Box(
+            m.liquidGlass(
+                glass, shape, LocalGlassTintAlpha.current - 0.02f,
+                Color.White, LocalGlassSpecular.current, dark, LocalGlassCorner.current - 4.dp
+            )
+        ) {
             Row(Modifier.padding(4.dp)) {
                 items.forEachIndexed { index, text ->
                     TabItem(text, index, selected, onSelect, Modifier.weight(1f))
@@ -420,7 +446,7 @@ fun ModeCard(
     val glass = LocalLiquidGlassState.current
     val dark = isSystemInDarkTheme()
     val cs = MaterialTheme.colorScheme
-    val shape = RoundedCornerShape(20.dp)
+    val shape = RoundedCornerShape(LocalGlassCorner.current)
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     val scale by animateFloatAsState(if (pressed) 0.965f else 1f, spring(), label = "mode")
@@ -437,10 +463,11 @@ fun ModeCard(
         Box(
             m.liquidGlass(
                 glass, shape,
-                tintAlpha = if (selected) 0.6f else 0.42f,
+                tintAlpha = if (selected) LocalGlassTintAlpha.current + 0.08f else LocalGlassTintAlpha.current - 0.10f,
                 specular = if (selected) accent else Color.White,
+                specularStrength = LocalGlassSpecular.current,
                 dark = dark,
-                corner = 20.dp
+                corner = LocalGlassCorner.current
             )
         ) {
             ModeCardContent(selected, emoji, title, desc, accent, cs)
