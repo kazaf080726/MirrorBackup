@@ -1,2 +1,4 @@
-﻿MirrorBackup-v2.0.1.apk
+﻿mirrorbackup-module-v1.0.0-100.zip
+mirrorbackup-module-v1.0.0.100.zip
+MirrorBackup-v2.1.0.apk
 SHA256SUMS.txt

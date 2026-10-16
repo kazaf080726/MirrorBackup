@@ -93,9 +93,10 @@ object Updater {
     }
 
     private fun parseModuleCodeFromName(name: String): Int {
-        // 约定命名：mirrorbackup-module-vX.Y.Z(CODE).zip —— 解析括号内数字；解析失败返回 0
+        // 命名约定：mirrorbackup-module-vX.Y.Z-CODE.zip
         return try {
-            val m = Regex("\\((\\d+)\\)").find(name)
+            val m = Regex("-(\\d+)\\.zip$").find(name)
+                ?: Regex("\\((\\d+)\\)").find(name)
             m?.groupValues?.get(1)?.toIntOrNull() ?: 0
         } catch (e: Exception) {
             0
