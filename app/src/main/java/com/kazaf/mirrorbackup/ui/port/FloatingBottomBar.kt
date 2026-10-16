@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -308,7 +309,10 @@ fun FloatingBottomBar(
     val combinedBackdrop = rememberCombinedBackdrop(backdrop, tabsBackdrop)
 
     Box(
-        modifier = modifier.width(IntrinsicSize.Min),
+        modifier = modifier
+            .width(IntrinsicSize.Min)
+            // 每个标签至少 100dp 宽，保证悬浮栏舒展（iOS 宽幅胶囊形态）
+            .defaultMinSize(minWidth = with(LocalDensity.current) { (tabsCount * 100).dp }),
         contentAlignment = Alignment.CenterStart
     ) {
         Row(

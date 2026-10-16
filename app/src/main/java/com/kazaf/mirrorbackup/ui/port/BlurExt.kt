@@ -33,7 +33,7 @@ fun BlurredBar(
     modifier: Modifier = Modifier,
     content: @Composable () -> Unit,
 ) {
-    val surfaceTint = MaterialTheme.colorScheme.surface.copy(alpha = 0.6f)
+    val surfaceTint = MaterialTheme.colorScheme.surface.copy(alpha = 0.45f)
     Box(
         modifier = modifier.then(
             if (blurActive && backdrop != null) {
@@ -55,9 +55,10 @@ fun BlurredBar(
         ),
     ) {
         if (blurActive && backdrop != null) {
+            // matchParentSize：只覆盖顶栏自身范围，绝不外溢到全屏
             Box(
                 Modifier
-                    .fillMaxSize()
+                    .matchParentSize()
                     .background(surfaceTint)
             )
         }

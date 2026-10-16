@@ -52,6 +52,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -270,24 +271,24 @@ private fun App() {
                         onClick = { activateTab(0) },
                     ) {
                         Spacer(Modifier.size(4.dp))
-                        Text("📤", fontSize = 22.sp)
-                        Text("备份工作台", fontSize = 11.sp)
+                        Text("📤", fontSize = 22.sp, modifier = Modifier.width(100.dp), textAlign = TextAlign.Center)
+                        Text("备份工作台", fontSize = 11.sp, modifier = Modifier.width(100.dp), textAlign = TextAlign.Center)
                     }
                     FloatingBottomBarItem(
                         selected = tab == 1,
                         onClick = { activateTab(1) },
                     ) {
                         Spacer(Modifier.size(4.dp))
-                        Text("📥", fontSize = 22.sp)
-                        Text("恢复工作台", fontSize = 11.sp)
+                        Text("📥", fontSize = 22.sp, modifier = Modifier.width(100.dp), textAlign = TextAlign.Center)
+                        Text("恢复工作台", fontSize = 11.sp, modifier = Modifier.width(100.dp), textAlign = TextAlign.Center)
                     }
                     FloatingBottomBarItem(
                         selected = tab == 2,
                         onClick = { activateTab(2) },
                     ) {
                         Spacer(Modifier.size(4.dp))
-                        Text("⚙️", fontSize = 22.sp)
-                        Text("设置", fontSize = 11.sp)
+                        Text("⚙️", fontSize = 22.sp, modifier = Modifier.width(100.dp), textAlign = TextAlign.Center)
+                        Text("设置", fontSize = 11.sp, modifier = Modifier.width(100.dp), textAlign = TextAlign.Center)
                     }
                 }
             )
