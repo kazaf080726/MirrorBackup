@@ -1,5 +1,29 @@
 # 更新日志
 
+## App v2.3.0（2026-10）
+
+### 🎨 UI 整体照搬 SukiSU-Ultra / KernelSU 管理器（源码级移植）
+- **iOS 液态玻璃悬浮底栏**：完整移植 SukiSU 的 FloatingBottomBar（compose-miuix 同源），
+  内嵌 Kyant0/AndroidLiquidGlass（Apache 2.0）效果管线：
+  - drawBackdrop 模糊采样 + vibrancy（饱和度 1.5 增强）
+  - lens 折射（折射高度/折射量/深度效果/色差）
+  - 镜面高光（HighlightStyle.Default，重力感应随倾角转动 —— 加速度计实时驱动）
+  - DampedDrag 阻尼拖拽 + InteractiveHighlight 按压光斑（AGSL）
+  - 选项卡指示器弹性动画
+- **顶栏纹理模糊**：blur 25px + 表面混合（BlurredBar）
+- **光影背景**：蓝紫绿渐变 + 呼吸光晕
+- **预测性返回手势**：非首页返回首页（enableOnBackInvokedCallback）
+- 玻璃表面采用兄弟节点采样结构（修复 ColorOS hwui 渲染树循环导致的 RenderThread 栈溢出崩溃）
+
+### 🔧 工程升级
+- Kotlin 2.2.20 / Compose 1.9.3（BOM 2025.08.01）/ AGP 8.13 / Gradle 8.13 / compileSdk 36
+- 内嵌 com.kyant.backdrop 液态玻璃库（Kyant0/AndroidLiquidGlass 1.0.0-beta03，Apache 2.0）
+
+### 真机实测（OPPO PLC110 · KernelSU）
+- 渲染树循环崩溃已修复：标签切换/滑动手势/主题切换/玻璃开关全程稳定
+- 亮色：玻璃条亮度 238 vs 背景 161；暗色：187 vs 105，悬浮对比明显
+- 主题设置持久化通过；重力高光随设备倾角实时变化
+
 ## App v2.2.0 / 模块 v1.1.0（2026-10）
 
 ### 🎨 主题设置体系（照搬 KernelSU / SukiSU 管理器）

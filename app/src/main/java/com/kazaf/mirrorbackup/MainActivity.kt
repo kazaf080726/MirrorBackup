@@ -10,7 +10,6 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateTo
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
@@ -19,9 +18,13 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
@@ -47,6 +50,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -60,19 +64,26 @@ import com.kazaf.mirrorbackup.ui.components.LocalGlassCorner
 import com.kazaf.mirrorbackup.ui.components.LocalGlassSpecular
 import com.kazaf.mirrorbackup.ui.components.LocalGlassTintAlpha
 import com.kazaf.mirrorbackup.ui.components.LocalLiquidGlassState
-import com.kazaf.mirrorbackup.ui.components.SegmentedTab
 import com.kazaf.mirrorbackup.ui.glass.liquidGlassHost
 import com.kazaf.mirrorbackup.ui.glass.rememberLiquidGlassState
+import com.kazaf.mirrorbackup.ui.port.BlurredBar
+import com.kazaf.mirrorbackup.ui.port.FloatingBottomBar
+import com.kazaf.mirrorbackup.ui.port.FloatingBottomBarItem
+import com.kazaf.mirrorbackup.ui.port.rememberBlurBackdrop
 import com.kazaf.mirrorbackup.ui.theme.MiuiColors
 import com.kazaf.mirrorbackup.ui.theme.MirrorBackupTheme
 import com.kazaf.mirrorbackup.viewmodel.BackupViewModel
 import com.kazaf.mirrorbackup.viewmodel.RestoreViewModel
 import com.kazaf.mirrorbackup.viewmodel.SettingsViewModel
+import com.kyant.backdrop.backdrops.layerBackdrop
+import com.kyant.backdrop.backdrops.rememberLayerBackdrop
 
 /**
  * 镜像备份 —— 作者：Kazaf
- * 已 ROOT 安卓设备本地分区镜像备份/恢复工具。
- * 除"检查更新"（用户主动点击时访问 GitHub）外全程离线。
+ * UI 骨架照搬 SukiSU-Ultra：渐变背景 + 内容区模糊捕获（LayerBackdrop）
+ * + 顶栏纹理模糊 + iOS 液态玻璃悬浮底栏（blur/vibrancy/lens/重力高光）+ 预测性返回。
+ * 结构要点：玻璃表面（顶栏/底栏）必须是 backdrop 内容层的兄弟节点，
+ * 否则会形成渲染树自引用循环（RenderThread 栈溢出）。
  */
 class MainActivity : ComponentActivity() {
 
@@ -99,7 +110,6 @@ private fun App() {
     val prefs = remember { context.getSharedPreferences("mirror_backup_prefs", Context.MODE_PRIVATE) }
     var agreed by remember { mutableStateOf(prefs.getBoolean("disclaimer_accepted", false)) }
 
-    // 首次启动：免责声明弹窗，必须勾选同意才可进入
     if (!agreed) {
         DisclaimerDialog(onAgree = {
             prefs.edit().putBoolean("disclaimer_accepted", true).apply()
@@ -113,7 +123,7 @@ private fun App() {
     val settingsVm: SettingsViewModel = viewModel()
     var tab by rememberSaveable { mutableIntStateOf(0) }
 
-    // 预测性返回：二级页面返回首页
+    // 预测性返回：非首页返回首页
     BackHandler(enabled = tab != 0) { tab = 0 }
 
     LaunchedEffect(Unit) {
@@ -121,12 +131,11 @@ private fun App() {
         settingsVm.refreshModuleStatus()
     }
 
-    val dark = isSystemInDarkTheme()
-    val glass = rememberLiquidGlassState()
-    val density = androidx.compose.ui.platform.LocalDensity.current.density
     val themeCfg = ThemeState.config
+    val glass = rememberLiquidGlassState()
+    val density = LocalDensity.current.density
 
-    // 应用玻璃参数（强度→位图模糊半径并重建背景快照）
+    // 位图玻璃强度
     LaunchedEffect(themeCfg.glassStrength) {
         glass.blurPx = when (themeCfg.glassStrength) {
             0 -> 1
@@ -135,45 +144,46 @@ private fun App() {
         }
         glass.refreshBackdrop()
     }
-    val effectiveGlass = if (themeCfg.glassEnabled) glass else null
-    val glowEnabled = themeCfg.glowEnabled
 
-    // 光影背景：渐变 + 缓慢呼吸的彩色光晕（有限循环后静止，兼顾省电与无障碍可读性）
-    val glowAlpha = remember { Animatable(if (glowEnabled) 0.12f else 0f) }
-    LaunchedEffect(glowEnabled) {
-        if (glowEnabled) {
-            repeat(7) {
-                glowAlpha.animateTo(0.24f, tween(6500, easing = LinearEasing))
-                glowAlpha.animateTo(0.12f, tween(6500, easing = LinearEasing))
-            }
-            glowAlpha.animateTo(0.16f, tween(1500))
-        } else {
-            glowAlpha.snapTo(0f)
-        }
-    }
+    // 全屏模糊捕获（玻璃表面采样的数据源）
+    val enableBlur = themeCfg.glassEnabled
+    val backdrop = rememberBlurBackdrop(enableBlur)
+    val fallbackBackdrop = rememberLayerBackdrop { }
 
     CompositionLocalProvider(
-        LocalLiquidGlassState provides effectiveGlass,
+        LocalLiquidGlassState provides glass,
         LocalGlassTintAlpha provides themeCfg.glassTintAlpha,
         LocalGlassSpecular provides themeCfg.specularStrength,
         LocalGlassCorner provides themeCfg.cornerRadius.dp
     ) {
-        Box(
-            Modifier
-                .fillMaxSize()
-                .background(
-                    Brush.verticalGradient(
-                        listOf(
-                            if (dark) Color(0xFF1B2A4A) else Color(0xFFDCEBFF),
-                            MaterialTheme.colorScheme.background
+        Box(Modifier.fillMaxSize()) {
+            // ── 背景：渐变 + 呼吸光晕 ──
+            val darkBg = isSystemInDarkTheme()
+            val glowAlpha = remember { Animatable(if (themeCfg.glowEnabled) 0.12f else 0f) }
+            LaunchedEffect(themeCfg.glowEnabled) {
+                if (themeCfg.glowEnabled) {
+                    repeat(7) {
+                        glowAlpha.animateTo(0.24f, tween(6500, easing = LinearEasing))
+                        glowAlpha.animateTo(0.12f, tween(6500, easing = LinearEasing))
+                    }
+                    glowAlpha.animateTo(0.16f, tween(1500))
+                } else {
+                    glowAlpha.snapTo(0f)
+                }
+            }
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(
+                        Brush.verticalGradient(
+                            listOf(
+                                if (darkBg) Color(0xFF1B2A4A) else Color(0xFFDCEBFF),
+                                MaterialTheme.colorScheme.background
+                            )
                         )
                     )
-                )
-                .liquidGlassHost(glass, dark, density)
-                .windowInsetsPadding(WindowInsets.safeDrawing)
-        ) {
-            if (glowEnabled) {
-                // 左上蓝色光晕
+            )
+            if (themeCfg.glowEnabled) {
                 Box(
                     Modifier
                         .size(320.dp)
@@ -184,7 +194,6 @@ private fun App() {
                             CircleShape
                         )
                 )
-                // 右下紫色光晕
                 Box(
                     Modifier
                         .size(360.dp)
@@ -196,7 +205,6 @@ private fun App() {
                             CircleShape
                         )
                 )
-                // 底部中央青色光晕
                 Box(
                     Modifier
                         .size(300.dp)
@@ -210,16 +218,19 @@ private fun App() {
                 )
             }
 
-            Column(Modifier.fillMaxSize()) {
-                Header(backupVm)
-                SegmentedTab(
-                    items = listOf("📤 备份工作台", "📥 恢复工作台", "⚙️ 设置"),
-                    selected = tab,
-                    onSelect = { tab = it },
-                    modifier = Modifier.padding(horizontal = 16.dp)
-                )
-                Spacer(Modifier.size(10.dp))
-                Box(Modifier.weight(1f)) {
+            // ── 主体：顶栏占位 + 内容区（内容区渲染进 backdrop 层）──
+            Column(
+                Modifier
+                    .fillMaxSize()
+                    .liquidGlassHost(glass, isSystemInDarkTheme(), density)
+                    .windowInsetsPadding(WindowInsets.safeDrawing)
+            ) {
+                Spacer(Modifier.height(84.dp))
+                Box(
+                    Modifier
+                        .weight(1f)
+                        .then(if (backdrop != null) Modifier.layerBackdrop(backdrop) else Modifier)
+                ) {
                     when (tab) {
                         0 -> BackupScreen(backupVm, onOpenRestore = { tab = 1 })
                         1 -> RestoreScreen(restoreVm)
@@ -227,6 +238,59 @@ private fun App() {
                     }
                 }
             }
+
+            // ── 顶栏（兄弟节点采样 backdrop，安全无循环）──
+            BlurredBar(
+                backdrop,
+                blurActive = enableBlur && backdrop != null,
+                modifier = Modifier.windowInsetsPadding(
+                    WindowInsets.safeDrawing.only(WindowInsetsSides.Top)
+                ),
+            ) {
+                Header(backupVm)
+            }
+
+            // ── iOS 液态玻璃悬浮底栏（照搬 SukiSU FloatingBottomBar）──
+            FloatingBottomBar(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(horizontal = 20.dp)
+                    .windowInsetsPadding(WindowInsets.navigationBars),
+                selectedIndex = tab,
+                onSelected = { tab = it },
+                backdrop = backdrop ?: fallbackBackdrop,
+                tabsCount = 3,
+                isBlurEnabled = enableBlur && backdrop != null,
+                accentColor = MaterialTheme.colorScheme.primary,
+                tabContentColor = MaterialTheme.colorScheme.onSurface,
+                surfaceContainer = MaterialTheme.colorScheme.surface,
+                content = { activateTab ->
+                    FloatingBottomBarItem(
+                        selected = tab == 0,
+                        onClick = { activateTab(0) },
+                    ) {
+                        Spacer(Modifier.size(4.dp))
+                        Text("📤", fontSize = 22.sp)
+                        Text("备份工作台", fontSize = 11.sp)
+                    }
+                    FloatingBottomBarItem(
+                        selected = tab == 1,
+                        onClick = { activateTab(1) },
+                    ) {
+                        Spacer(Modifier.size(4.dp))
+                        Text("📥", fontSize = 22.sp)
+                        Text("恢复工作台", fontSize = 11.sp)
+                    }
+                    FloatingBottomBarItem(
+                        selected = tab == 2,
+                        onClick = { activateTab(2) },
+                    ) {
+                        Spacer(Modifier.size(4.dp))
+                        Text("⚙️", fontSize = 22.sp)
+                        Text("设置", fontSize = 11.sp)
+                    }
+                }
+            )
         }
     }
 }
@@ -235,7 +299,7 @@ private fun App() {
 private fun Header(backupVm: BackupViewModel) {
     val rc = backupVm.rootCheck
     Column(
-        Modifier.padding(start = 20.dp, end = 20.dp, top = 12.dp, bottom = 10.dp)
+        Modifier.padding(start = 20.dp, end = 20.dp, top = 10.dp, bottom = 8.dp)
     ) {
         Row(
             Modifier.fillMaxWidth(),
@@ -247,10 +311,10 @@ private fun Header(backupVm: BackupViewModel) {
                     "镜像备份",
                     fontSize = 27.sp,
                     fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onBackground
+                    color = MaterialTheme.colorScheme.onSurface
                 )
                 Text(
-                    "作者：Kazaf · iOS 27 液态玻璃 · 多线程 · 仅存储",
+                    "作者：Kazaf · iOS 液态玻璃 · 多线程 · 仅存储",
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -265,7 +329,7 @@ private fun Header(backupVm: BackupViewModel) {
                 onClick = { backupVm.refreshEnvironment() },
                 shape = RoundedCornerShape(999.dp),
                 color = statusColor.copy(alpha = 0.14f),
-                border = BorderStroke(1.dp, statusColor.copy(alpha = 0.45f))
+                border = androidx.compose.foundation.BorderStroke(1.dp, statusColor.copy(alpha = 0.45f))
             ) {
                 Row(
                     Modifier.padding(horizontal = 12.dp, vertical = 7.dp),

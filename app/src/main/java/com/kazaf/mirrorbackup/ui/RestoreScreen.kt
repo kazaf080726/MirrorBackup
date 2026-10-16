@@ -302,7 +302,7 @@ fun RestoreScreen(vm: RestoreViewModel) {
         FloatingDock(
             Modifier
                 .align(Alignment.BottomCenter)
-                .padding(horizontal = 16.dp, vertical = 10.dp)
+                .padding(start = 16.dp, end = 16.dp, bottom = 108.dp)
                 .fillMaxWidth()
         ) {
             val busy = vm.busy

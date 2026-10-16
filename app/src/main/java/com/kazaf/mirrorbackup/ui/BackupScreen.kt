@@ -474,7 +474,7 @@ fun BackupScreen(vm: BackupViewModel, onOpenRestore: () -> Unit) {
         FloatingDock(
             Modifier
                 .align(Alignment.BottomCenter)
-                .padding(horizontal = 16.dp, vertical = 10.dp)
+                .padding(start = 16.dp, end = 16.dp, bottom = 108.dp)
                 .fillMaxWidth()
         ) {
             if (running || progress.phase == BackupEngine.Phase.WAITING_CHOICE) {
