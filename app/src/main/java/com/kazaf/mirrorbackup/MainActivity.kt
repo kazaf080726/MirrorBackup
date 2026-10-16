@@ -6,11 +6,9 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.animateTo
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -117,14 +115,15 @@ private fun App() {
     val glass = rememberLiquidGlassState()
     val density = androidx.compose.ui.platform.LocalDensity.current.density
 
-    // 光影背景：渐变 + 两个缓慢呼吸的彩色光晕（玻璃折射的"背后内容"）
-    val glow = rememberInfiniteTransition(label = "glow")
-    val glowAlpha by glow.animateFloat(
-        initialValue = 0.10f,
-        targetValue = 0.24f,
-        animationSpec = infiniteRepeatable(tween(6500, easing = LinearEasing), RepeatMode.Reverse),
-        label = "glowA"
-    )
+    // 光影背景：渐变 + 缓慢呼吸的彩色光晕（有限循环后静止，兼顾省电与无障碍可读性）
+    val glowAlpha = remember { Animatable(0.12f) }
+    LaunchedEffect(Unit) {
+        repeat(7) {
+            glowAlpha.animateTo(0.24f, tween(6500, easing = LinearEasing))
+            glowAlpha.animateTo(0.12f, tween(6500, easing = LinearEasing))
+        }
+        glowAlpha.animateTo(0.16f, tween(1500))
+    }
 
     CompositionLocalProvider(LocalLiquidGlassState provides glass) {
         Box(
@@ -146,7 +145,7 @@ private fun App() {
                 Modifier
                     .size(320.dp)
                     .offset(x = (-140).dp, y = (-120).dp)
-                    .graphicsLayer { alpha = glowAlpha }
+                    .graphicsLayer { alpha = glowAlpha.value }
                     .background(
                         Brush.radialGradient(listOf(MiuiColors.Blue.copy(alpha = 0.55f), Color.Transparent)),
                         CircleShape
@@ -158,7 +157,7 @@ private fun App() {
                     .size(360.dp)
                     .align(Alignment.BottomEnd)
                     .offset(x = 120.dp, y = 100.dp)
-                    .graphicsLayer { alpha = glowAlpha }
+                    .graphicsLayer { alpha = glowAlpha.value }
                     .background(
                         Brush.radialGradient(listOf(MiuiColors.Purple.copy(alpha = 0.45f), Color.Transparent)),
                         CircleShape
@@ -170,7 +169,7 @@ private fun App() {
                     .size(300.dp)
                     .align(Alignment.CenterStart)
                     .offset(x = (-80).dp, y = 400.dp)
-                    .graphicsLayer { alpha = glowAlpha }
+                    .graphicsLayer { alpha = glowAlpha.value }
                     .background(
                         Brush.radialGradient(listOf(MiuiColors.Green.copy(alpha = 0.28f), Color.Transparent)),
                         CircleShape
