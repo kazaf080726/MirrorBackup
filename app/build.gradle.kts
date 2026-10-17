@@ -14,8 +14,8 @@ android {
         applicationId = "com.kazaf.mirrorbackup"
         minSdk = 33
         targetSdk = 34
-        versionCode = 10
-        versionName = "2.3.1"
+        versionCode = 12
+        versionName = "2.5.0"
     }
 
     signingConfigs {
@@ -71,5 +71,7 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.ui:ui-tooling-preview")
     debugImplementation("androidx.compose.ui:ui-tooling")
+    // Material You 动态取色（对齐 KSU/SukiSU 的 Color Style / Color Spec，同源 materialkolor）
+    implementation("com.materialkolor:material-kolor:4.0.5")
     // 液态玻璃管线：内嵌 Kyant0/AndroidLiquidGlass（Apache 2.0，与 SukiSU-Ultra 同源）
 }

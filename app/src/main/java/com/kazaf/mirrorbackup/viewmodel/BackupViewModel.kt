@@ -11,6 +11,7 @@ import com.kazaf.mirrorbackup.core.BackupEngine
 import com.kazaf.mirrorbackup.core.BackupMode
 import com.kazaf.mirrorbackup.core.BackupRecord
 import com.kazaf.mirrorbackup.core.LogBuffer
+import com.kazaf.mirrorbackup.core.OutputStore
 import com.kazaf.mirrorbackup.core.PartitionInfo
 import com.kazaf.mirrorbackup.core.PartitionRules
 import com.kazaf.mirrorbackup.core.PartitionScanner
@@ -18,6 +19,7 @@ import com.kazaf.mirrorbackup.core.RecordsStore
 import com.kazaf.mirrorbackup.core.SuManager
 import com.kazaf.mirrorbackup.core.ThreadMode
 import com.kazaf.mirrorbackup.core.UserBlacklist
+import com.kazaf.mirrorbackup.core.fmtSize
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -54,6 +56,10 @@ class BackupViewModel(app: Application) : AndroidViewModel(app) {
     var records by mutableStateOf<List<BackupRecord>>(emptyList())
         private set
 
+    /** 手动模式分区搜索关键字 */
+    var partitionQuery by mutableStateOf("")
+        private set
+
     /** 用户自主黑名单（默认空 —— 应用不做任何隐性排除） */
     var userBlacklist by mutableStateOf<Set<String>>(emptySet())
         private set
@@ -65,6 +71,21 @@ class BackupViewModel(app: Application) : AndroidViewModel(app) {
 
     val manualPartitions: List<PartitionInfo>
         get() = partitions.filterNot { it.name in userBlacklist }
+
+    /** 搜索过滤后的可勾选分区 */
+    val filteredPartitions: List<PartitionInfo>
+        get() = if (partitionQuery.isBlank()) manualPartitions
+        else manualPartitions.filter { it.name.contains(partitionQuery.trim(), ignoreCase = true) }
+
+    fun updatePartitionQuery(q: String) {
+        partitionQuery = q
+    }
+
+    fun deleteRecord(r: BackupRecord) {
+        RecordsStore.delete(getApplication(), r)
+        refreshRecords()
+        log.info("已删除备份记录: ${r.time} · ${r.mode}")
+    }
 
     val selectedTargets: List<PartitionInfo>
         get() = breakdown.targets
@@ -154,6 +175,19 @@ class BackupViewModel(app: Application) : AndroidViewModel(app) {
 
     fun start() {
         if (running) return
+        // 剩余空间预检：目标总量 > 可用空间时直接阻断（防止必然失败的大备份）
+        val targets = breakdown.targets
+        val totalBytes = targets.sumOf { it.sizeBytes }
+        val probeDir = OutputStore.rootDir().let { if (it.exists()) it else getApplication<android.app.Application>().filesDir }
+        val usable = probeDir.usableSpace
+        if (totalBytes > 0 && usable > 0 && totalBytes > usable) {
+            log.error("❌ 剩余空间不足：镜像总量 ${fmtSize(totalBytes)} > 可用 ${fmtSize(usable)}")
+            log.error("   请释放空间，或在手动模式减少勾选后重试")
+            return
+        }
+        if (totalBytes > 0 && usable > 0 && totalBytes > usable * 0.9) {
+            log.warn("⚠ 剩余空间偏紧：镜像 ${fmtSize(totalBytes)} / 可用 ${fmtSize(usable)}")
+        }
         running = true
         viewModelScope.launch(Dispatchers.IO) {
             try {

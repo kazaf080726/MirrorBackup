@@ -99,12 +99,58 @@ object PartitionScanner {
     )
 
     /**
-     * 枚举 /dev/block/by-name 下所有分区。
-     * 优先使用提取辅助模块的 mb_parts 原生二进制（单进程极速枚举），
-     * 未安装模块时回退 shell 脚本。
+     * 枚举分区：模块 mb_scan（接口扫描，适配不同机型路径）→ mb_parts → shell 兜底。
      */
     fun scan(su: SuManager, log: LogBuffer): List<PartitionInfo> {
-        // 模块二进制优先
+        // 1) 模块接口扫描器 mb_scan（v2.0+）：分区 + 设备环境一次拿全
+        val hasMbScan = try {
+            su.exec("command -v mb_scan 2>/dev/null", 8_000).stdout.trim().startsWith("/")
+        } catch (e: Exception) {
+            false
+        }
+        if (hasMbScan) {
+            val r = su.exec("mb_scan", 20_000)
+            if (r.exitCode == 0) {
+                val envs = r.stdout.lineSequence()
+                    .filter { it.startsWith("ENV|") }
+                    .map { it.removePrefix("ENV|").split("|") }
+                    .filter { it.size >= 2 }
+                    .associate { it[0] to it[1] }
+                val partLines = r.stdout.lineSequence()
+                    .filter { it.startsWith("PART|") }
+                    .map { it.removePrefix("PART|").split("|") }
+                    .filter { it.size >= 3 }
+                    .toList()
+                if (partLines.isNotEmpty()) {
+                    val parts = partLines.mapNotNull { cols ->
+                        val name = cols[0]
+                        val path = cols[1]
+                        val bytes = cols[2].toLongOrNull() ?: -1L
+                        if (bytes <= 0) {
+                            log.warn("⚠ 分区 $name 尺寸未知（$path），已跳过")
+                            null
+                        } else PartitionInfo(name, path, bytes)
+                    }.sortedBy { it.name }
+                    log.info("⚡ 接口扫描（模块 mb_scan v2.0）: ${parts.size} 个分区")
+                    envs["by_name_dir"]?.let { dir ->
+                        if (dir != "none") log.info("   分区目录: $dir")
+                    }
+                    envs["cpu_cores"]?.let { log.info("   CPU 核心: $it 核 · 页大小 ${envs["page_size"] ?: "?"}B") }
+                    if (envs["super"] == "1") log.info("   super 动态分区: 检测到")
+                    if (envs["mapper"] == "1") log.info("   device-mapper: 已启用（dm 分区自动解析）")
+                    if (envs["ab_slot"].let { it != null && it != "none" }) {
+                        log.info("   A/B 槽位: ${envs["ab_slot"]}")
+                    }
+                    envs["proc_partitions"]?.let { n ->
+                        val extra = (n.toIntOrNull() ?: 0) - parts.size
+                        if (extra > 0) log.info("   /proc/partitions 可见 ${n} 个块设备（含未命名 ${extra} 个）")
+                    }
+                    return parts
+                }
+            }
+            log.warn("mb_scan 执行异常 (exit=${r.exitCode}, outLen=${r.stdout.length}, errLen=${r.stderr.length}, err=${r.stderr.take(60)})，回退 mb_parts")
+        }
+        // 2) mb_parts 极速枚举
         val hasMbParts = try {
             su.exec("command -v mb_parts 2>/dev/null", 8_000).stdout.trim().startsWith("/")
         } catch (e: Exception) {

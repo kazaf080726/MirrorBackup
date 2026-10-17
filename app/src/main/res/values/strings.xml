@@ -1,4 +1,47 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">镜像备份</string>
+    <string name="header_subtitle">作者：Kazaf · iOS 液态玻璃 · 多线程 · 仅存储</string>
+    <string name="tab_backup">备份工作台</string>
+    <string name="tab_restore">恢复工作台</string>
+    <string name="tab_settings">设置</string>
+    <string name="hero_working">工作正常</string>
+    <string name="hero_need_auth">需要授权</string>
+    <string name="hero_version">版本：v%1$s · %2$s</string>
+    <string name="hero_stats">%1$d 个分区 · %2$d 核 · 满核 %3$d 线程</string>
+    <string name="btn_start_backup">🚀 开始备份</string>
+    <string name="btn_stop_task">■ 停止任务</string>
+    <string name="sec_choose_mode">选择备份模式</string>
+    <string name="mode_all">全部备份</string>
+    <string name="mode_all_desc">扫到多少备份多少\n含 super 与引导分区</string>
+    <string name="mode_normal">普通备份</string>
+    <string name="mode_normal_desc">仅跳过 super / &gt;10GB\n（黑名单由你决定）</string>
+    <string name="mode_manual">手动备份</string>
+    <string name="mode_manual_desc">自行勾选\n需要备份的分区</string>
+    <string name="mode_private">私有分区备份</string>
+    <string name="mode_private_desc">仅 efs/nv/modem 等\n硬件私有分区</string>
+    <string name="sec_threads">备份线程</string>
+    <string name="sec_format">镜像存储格式</string>
+    <string name="sec_records">备份记录（提取历史）</string>
+    <string name="sec_log">实时日志</string>
+    <string name="theme_entry_title">🎨 主题设置</string>
+    <string name="theme_entry_desc">颜色模式 / Key color / Color Style / Color Spec / 液态玻璃</string>
+    <string name="storage_title">📁 存储位置</string>
+    <string name="lang_title">🌐 语言 / Language</string>
+    <string name="lang_system">跟随系统</string>
+    <string name="lang_zh_cn">简体中文</string>
+    <string name="lang_zh_tw">繁體中文</string>
+    <string name="lang_en">English</string>
+    <string name="check_update">检查更新</string>
+    <string name="one_click_update">🚀 一键更新（只装一次）</string>
+    <string name="about_title">ℹ️ 关于</string>
+    <string name="storage_backup_dir">备份目录</string>
+    <string name="storage_session_dir">会话目录</string>
+    <string name="storage_session_desc">备份_日期_时间/（镜像 + manifest + 哈希）</string>
+    <string name="storage_granted">✅ 已授予全部文件访问权限</string>
+    <string name="storage_not_granted">⚠ 未授权：备份将写入应用私有目录</string>
+    <string name="btn_recheck">重新检查权限</string>
+    <string name="btn_grant">授予全部文件访问权限</string>
+    <string name="btn_open_folder">打开备份文件夹</string>
+    <string name="btn_verify_latest">校验最近一次备份（SHA-256 逐镜像比对）</string>
 </resources>

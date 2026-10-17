@@ -87,8 +87,10 @@ class BackupEngine(
         _progress.value = Progress(Phase.IDLE, "", 0, 0, 0.0, 0, "")
     }
 
+    private var sessionDir: File = File(context.filesDir, "backup_work")
+
     private val workDir: File
-        get() = File(context.filesDir, "backup_work")
+        get() = sessionDir
 
     private fun setProgress(p: Progress) {
         _progress.value = p
@@ -188,21 +190,15 @@ class BackupEngine(
             }
             log.ok("✔ 全部目标分区节点有效，可正常打开")
 
-            // ── 工作目录 ──
-            val dir = workDir
-            if (dir.exists()) {
-                log.warn("⚠ 清理上次遗留的工作目录（未打包的镜像将被删除）")
-                dir.deleteRecursively()
-            }
-            dir.mkdirs()
+            // ── 工作目录：内部存储「镜像备份」文件夹（未授权时回退私有目录）──
+            val dir = OutputStore.prepareSession(context, log)
+            sessionDir = dir
             val totalBytes = targets.sumOf { it.sizeBytes }
-            log.info("工作目录: ${dir.absolutePath} | 可用空间 ${fmtSize(dir.usableSpace)} | 预估镜像总量 ${fmtSize(totalBytes)}")
+            log.info("可用空间: ${fmtSize(dir.usableSpace)} | 预估镜像总量: ${fmtSize(totalBytes)}")
             if (dir.usableSpace < totalBytes) {
                 log.warn("⚠ 可用空间小于镜像总量，任务可能因空间不足失败")
             }
-
-            // ── 多线程并行备份（每镜像完成后立即完整性校验） ──
-            log.info("── 开始并行备份（${threadMode.count} 线程）──")
+            log.info("── 开始并行备份（${threadMode.count} 线程 · ${CpuDetector.label}）──")
             val results = backupParallel(targets, threadMode.count, sparse, ts)
 
             // ── 全量完整性校验（SHA-256 + CRC32） ──
@@ -213,7 +209,7 @@ class BackupEngine(
             val manifest = BackupManifest(
                 manifestVersion = 1,
                 appName = "镜像备份",
-                appVersion = "2.0.0",
+                appVersion = com.kazaf.mirrorbackup.BuildConfig.VERSION_NAME,
                 mode = mode.key,
                 createdAt = ts.format(Date()),
                 format = if (sparse) "sparse" else "raw",
@@ -278,6 +274,7 @@ class BackupEngine(
                 )
             )
             log.info("📋 备份记录已写入（累计记录见备份工作台记录表）")
+            Notifier.notifyDone(context, verified.size, durationSec, location)
 
             log.ok("✔✔✔ 备份完成：${verified.size} 个镜像提取成功，耗时 ${durationSec}s ✔✔✔")
             setProgress(Progress(Phase.DONE, "", 0, 0, 0.0, 0, "任务完成，已自动重置"))
@@ -287,7 +284,8 @@ class BackupEngine(
             setProgress(Progress(Phase.CANCELLED, "", 0, 0, 0.0, 0, "已停止"))
             throw ce
         } catch (e: Exception) {
-            log.error("❌ 任务失败: ${e.message}")
+            log.error("❌ 任务失败: " + e.message)
+            Notifier.notifyFailed(context, e.message ?: "任务失败")
             _packPrompt.value = null
             setProgress(Progress(Phase.FAILED, "", 0, 0, 0.0, 0, e.message ?: "任务失败"))
         } finally {

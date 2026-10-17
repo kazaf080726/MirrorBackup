@@ -51,16 +51,19 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.kazaf.mirrorbackup.R
 import com.kazaf.mirrorbackup.core.ThemeState
 import com.kazaf.mirrorbackup.ui.BackupScreen
 import com.kazaf.mirrorbackup.ui.DisclaimerDialog
 import com.kazaf.mirrorbackup.ui.RestoreScreen
 import com.kazaf.mirrorbackup.ui.SettingsScreen
+import com.kazaf.mirrorbackup.ui.settings.ThemeSettingsScreen
 import com.kazaf.mirrorbackup.ui.components.LocalGlassCorner
 import com.kazaf.mirrorbackup.ui.components.LocalGlassSpecular
 import com.kazaf.mirrorbackup.ui.components.LocalGlassTintAlpha
@@ -88,6 +91,10 @@ import com.kyant.backdrop.backdrops.rememberLayerBackdrop
  */
 class MainActivity : ComponentActivity() {
 
+    override fun attachBaseContext(newBase: android.content.Context) {
+        super.attachBaseContext(com.kazaf.mirrorbackup.core.LocaleHelper.wrap(newBase))
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         ThemeState.init(applicationContext)
@@ -96,8 +103,10 @@ class MainActivity : ComponentActivity() {
             val theme = ThemeState.config
             MirrorBackupTheme(
                 colorMode = theme.colorMode,
-                monetEnabled = theme.monetEnabled,
-                accent = Color(theme.accent)
+                keyColor = theme.keyColor,
+                paletteStyleName = theme.paletteStyle,
+                colorSpecName = theme.colorSpec,
+                dynamicEffects = theme.dynamicEffects
             ) {
                 App()
             }
@@ -123,13 +132,49 @@ private fun App() {
     val restoreVm: RestoreViewModel = viewModel()
     val settingsVm: SettingsViewModel = viewModel()
     var tab by rememberSaveable { mutableIntStateOf(0) }
+    var showThemeSettings by rememberSaveable { mutableStateOf(false) }
 
-    // 预测性返回：非首页返回首页
-    BackHandler(enabled = tab != 0) { tab = 0 }
+    // Android 13+ 通知权限（备份完成提醒）
+    val notifPermLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        androidx.activity.result.contract.ActivityResultContracts.RequestPermission()
+    ) { }
+    LaunchedEffect(Unit) {
+        if (android.os.Build.VERSION.SDK_INT >= 33 &&
+            androidx.core.content.ContextCompat.checkSelfPermission(
+                context, android.Manifest.permission.POST_NOTIFICATIONS
+            ) != android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            notifPermLauncher.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
+    // 预测性返回：主题页 → 首页 → 系统返回（可关闭预测性返回开关）
+    BackHandler(enabled = showThemeSettings) { showThemeSettings = false }
+    BackHandler(enabled = !showThemeSettings && tab != 0) { tab = 0 }
 
     LaunchedEffect(Unit) {
         backupVm.refreshEnvironment()
         settingsVm.refreshModuleStatus()
+    }
+
+    // 检测不到 ROOT 时弹窗提示（不再显示右上角芯片）
+    val rcNow = backupVm.rootCheck
+    if (rcNow != null && !rcNow.rootOk) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { },
+            title = { Text("未检测到 ROOT 权限") },
+            text = {
+                Text(
+                    "请在 KernelSU / Magisk / APatch 管理器中授权「镜像备份」，" +
+                        "授权后点击下方按钮重新检测。\n\n当前状态：" + rcNow.detail
+                )
+            },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = { backupVm.refreshEnvironment() }) {
+                    Text("重新检测")
+                }
+            }
+        )
     }
 
     val themeCfg = ThemeState.config
@@ -155,7 +200,11 @@ private fun App() {
         LocalLiquidGlassState provides glass,
         LocalGlassTintAlpha provides themeCfg.glassTintAlpha,
         LocalGlassSpecular provides themeCfg.specularStrength,
-        LocalGlassCorner provides themeCfg.cornerRadius.dp
+        LocalGlassCorner provides themeCfg.cornerRadius.dp,
+        com.kazaf.mirrorbackup.ui.components.LocalCardTintAlpha provides themeCfg.cardTintAlpha,
+        com.kazaf.mirrorbackup.ui.components.LocalCardGlassEnabled provides themeCfg.cardGlassEnabled,
+        com.kazaf.mirrorbackup.ui.components.LocalCompactLayout provides themeCfg.compactLayout,
+        com.kazaf.mirrorbackup.ui.components.LocalUiStyle provides themeCfg.uiStyle
     ) {
         Box(Modifier.fillMaxSize()) {
             // ── 背景：渐变 + 呼吸光晕 ──
@@ -163,11 +212,11 @@ private fun App() {
             val glowAlpha = remember { Animatable(if (themeCfg.glowEnabled) 0.12f else 0f) }
             LaunchedEffect(themeCfg.glowEnabled) {
                 if (themeCfg.glowEnabled) {
-                    repeat(7) {
-                        glowAlpha.animateTo(0.24f, tween(6500, easing = LinearEasing))
-                        glowAlpha.animateTo(0.12f, tween(6500, easing = LinearEasing))
+                    // 持续呼吸（光影光晕常驻）
+                    while (true) {
+                        glowAlpha.animateTo(0.26f, tween(6000, easing = LinearEasing))
+                        glowAlpha.animateTo(0.10f, tween(6000, easing = LinearEasing))
                     }
-                    glowAlpha.animateTo(0.16f, tween(1500))
                 } else {
                     glowAlpha.snapTo(0f)
                 }
@@ -176,12 +225,21 @@ private fun App() {
                 Modifier
                     .fillMaxSize()
                     .background(
-                        Brush.verticalGradient(
-                            listOf(
-                                if (darkBg) Color(0xFF1B2A4A) else Color(0xFFDCEBFF),
-                                MaterialTheme.colorScheme.background
+                        if (themeCfg.uiStyle == "maple") {
+                            Brush.verticalGradient(
+                                listOf(
+                                    if (darkBg) Color(0xFF1A1030) else Color(0xFFF1EAFF),
+                                    if (darkBg) Color(0xFF0D0A16) else Color(0xFFFBF8FF)
+                                )
                             )
-                        )
+                        } else {
+                            Brush.verticalGradient(
+                                listOf(
+                                    if (darkBg) Color(0xFF1B2A4A) else Color(0xFFDCEBFF),
+                                    MaterialTheme.colorScheme.background
+                                )
+                            )
+                        }
                     )
             )
             if (themeCfg.glowEnabled) {
@@ -191,7 +249,7 @@ private fun App() {
                         .offset(x = (-140).dp, y = (-120).dp)
                         .graphicsLayer { alpha = glowAlpha.value }
                         .background(
-                            Brush.radialGradient(listOf(MiuiColors.Blue.copy(alpha = 0.55f), Color.Transparent)),
+                            Brush.radialGradient(listOf((if (themeCfg.uiStyle == "maple") Color(0xFF7B5CFF) else MiuiColors.Blue).copy(alpha = 0.55f), Color.Transparent)),
                             CircleShape
                         )
                 )
@@ -202,7 +260,7 @@ private fun App() {
                         .offset(x = 120.dp, y = 100.dp)
                         .graphicsLayer { alpha = glowAlpha.value }
                         .background(
-                            Brush.radialGradient(listOf(MiuiColors.Purple.copy(alpha = 0.45f), Color.Transparent)),
+                            Brush.radialGradient(listOf((if (themeCfg.uiStyle == "maple") Color(0xFFB388FF) else MiuiColors.Purple).copy(alpha = 0.45f), Color.Transparent)),
                             CircleShape
                         )
                 )
@@ -213,7 +271,7 @@ private fun App() {
                         .offset(x = (-80).dp, y = 400.dp)
                         .graphicsLayer { alpha = glowAlpha.value }
                         .background(
-                            Brush.radialGradient(listOf(MiuiColors.Green.copy(alpha = 0.28f), Color.Transparent)),
+                            Brush.radialGradient(listOf((if (themeCfg.uiStyle == "maple") Color(0xFF9C6BFF) else MiuiColors.Green).copy(alpha = 0.28f), Color.Transparent)),
                             CircleShape
                         )
                 )
@@ -232,10 +290,19 @@ private fun App() {
                         .weight(1f)
                         .then(if (backdrop != null) Modifier.layerBackdrop(backdrop) else Modifier)
                 ) {
-                    when (tab) {
-                        0 -> BackupScreen(backupVm, onOpenRestore = { tab = 1 })
-                        1 -> RestoreScreen(restoreVm)
-                        else -> SettingsScreen(settingsVm, backupVm)
+                    // 主题设置页 / 三个工作台（Crossfade 动效切换）
+                    androidx.compose.animation.Crossfade(
+                        targetState = if (showThemeSettings) -1 else tab,
+                        animationSpec = androidx.compose.animation.core.tween(if (themeCfg.dynamicEffects) 280 else 0),
+                        label = "tab_content"
+                    ) { current ->
+                        if (current == -1) {
+                            ThemeSettingsScreen(onClose = { showThemeSettings = false })
+                        } else when (current) {
+                            0 -> BackupScreen(backupVm, onOpenRestore = { tab = 1 })
+                            1 -> RestoreScreen(restoreVm)
+                            else -> SettingsScreen(settingsVm, backupVm, onOpenTheme = { showThemeSettings = true })
+                        }
                     }
                 }
             }
@@ -258,7 +325,10 @@ private fun App() {
                     .padding(horizontal = 20.dp)
                     .windowInsetsPadding(WindowInsets.navigationBars),
                 selectedIndex = tab,
-                onSelected = { tab = it },
+                onSelected = {
+                    tab = it
+                    showThemeSettings = false
+                },
                 backdrop = backdrop ?: fallbackBackdrop,
                 tabsCount = 3,
                 isBlurEnabled = enableBlur && backdrop != null,
@@ -298,66 +368,22 @@ private fun App() {
 
 @Composable
 private fun Header(backupVm: BackupViewModel) {
-    val rc = backupVm.rootCheck
     Column(
         Modifier.padding(start = 20.dp, end = 20.dp, top = 10.dp, bottom = 8.dp)
     ) {
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column {
-                Text(
-                    "镜像备份",
-                    fontSize = 27.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-                Text(
-                    "作者：Kazaf · iOS 液态玻璃 · 多线程 · 仅存储",
-                    fontSize = 11.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            val ok = rc?.rootOk == true
-            val statusColor = when {
-                rc == null -> MiuiColors.Orange
-                ok -> MiuiColors.Green
-                else -> MiuiColors.Red
-            }
-            Surface(
-                onClick = { backupVm.refreshEnvironment() },
-                shape = RoundedCornerShape(999.dp),
-                color = statusColor.copy(alpha = 0.14f),
-                border = androidx.compose.foundation.BorderStroke(1.dp, statusColor.copy(alpha = 0.45f))
-            ) {
-                Row(
-                    Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Box(
-                        Modifier
-                            .size(8.dp)
-                            .background(statusColor, CircleShape)
-                    )
-                    Spacer(Modifier.width(6.dp))
-                    Text(
-                        when {
-                            rc == null -> "ROOT 检测中…"
-                            ok -> "ROOT ✓ · ${shortSuPath(rc.path)}"
-                            else -> "ROOT ✗ 未授权"
-                        },
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        color = statusColor
-                    )
-                }
-            }
-        }
+        Text(
+            stringResource(R.string.app_name),
+            fontSize = 27.sp,
+            fontWeight = FontWeight.Bold,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+        Text(
+            stringResource(R.string.header_subtitle),
+            fontSize = 11.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }
-
 private fun shortSuPath(path: String?): String {
     if (path == null) return "su"
     return when {

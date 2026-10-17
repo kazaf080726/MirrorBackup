@@ -60,6 +60,91 @@ class SettingsViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** 设备/Root 环境（模块 mb_info 提供，失败时回退 shell） */
+    var deviceEnv by mutableStateOf<Map<String, String>?>(null)
+        private set
+
+    fun loadDeviceEnv() {
+        viewModelScope.launch {
+            val env = withContext(Dispatchers.IO) {
+                try {
+                    val hasInfo = su.exec("command -v mb_info 2>/dev/null", 6_000)
+                        .stdout.trim().startsWith("/")
+                    if (hasInfo) {
+                        val r = su.exec("mb_info", 10_000)
+                        if (r.exitCode == 0) {
+                            r.stdout.lineSequence()
+                                .filter { it.startsWith("ENV|") }
+                                .map { it.removePrefix("ENV|").split("|") }
+                                .filter { it.size >= 2 }
+                                .associate { it[0] to it[1] } + mapOf("_src" to "模块 mb_info v2.1")
+                        } else null
+                    } else null
+                } catch (e: Exception) {
+                    null
+                }
+            }
+            deviceEnv = env ?: withContext(Dispatchers.IO) {
+                // 模块未安装时的 shell 兜底
+                try {
+                    val cmd = "echo m=$(getprop ro.product.manufacturer)\$(getprop ro.product.model)" +
+                        "; echo a=$(getprop ro.build.version.release)" +
+                        "; echo s=$(getprop ro.build.version.sdk)" +
+                        "; echo p=$(getprop ro.build.version.security_patch)" +
+                        "; echo k=$(uname -r)" +
+                        "; echo c=$(nproc --all)" +
+                        "; echo x=$(getprop ro.product.cpu.abilist)" +
+                        "; echo b=$(getprop ro.boot.slot_suffix)"
+                    val r = su.exec(cmd, 8_000)
+                    val map = r.stdout.lineSequence()
+                        .mapNotNull { line ->
+                            val idx = line.indexOf('=')
+                            if (idx > 0) line.substring(0, idx) to line.substring(idx + 1) else null
+                        }
+                        .toMap()
+                    mapOf(
+                        "ro.product.manufacturer" to (map["m"] ?: "?"),
+                        "ro.product.model" to "",
+                        "ro.build.version.release" to (map["a"] ?: "?"),
+                        "ro.build.version.sdk" to (map["s"] ?: "?"),
+                        "ro.build.version.security_patch" to (map["p"] ?: "?"),
+                        "kernel" to (map["k"] ?: "?"),
+                        "cpu_cores" to (map["c"] ?: "?"),
+                        "arch" to (map["x"] ?: "?"),
+                        "ro.boot.slot_suffix" to (map["b"] ?: "none"),
+                        "_src" to "shell（安装模块 v2.1 可获更全信息）"
+                    )
+                } catch (e: Exception) {
+                    null
+                }
+            }
+        }
+    }
+    /** 校验最近一次备份（只读：逐镜像 SHA-256 与 manifest 比对） */
+    fun verifyLatestBackup() {
+        if (busy) return
+        busy = true
+        lastError = null
+        viewModelScope.launch {
+            try {
+                val session = withContext(Dispatchers.IO) {
+                    com.kazaf.mirrorbackup.core.BackupVerifier.latestSession()
+                }
+                if (session == null) {
+                    log.warn("⚠ 未找到「镜像备份」文件夹中的备份会话")
+                    lastError = "未找到可校验的备份"
+                    return@launch
+                }
+                withContext(Dispatchers.IO) {
+                    com.kazaf.mirrorbackup.core.BackupVerifier.verify(su, session, log)
+                }
+            } catch (e: Exception) {
+                log.error("❌ 校验异常: ${e.message}")
+            } finally {
+                busy = false
+            }
+        }
+    }
     /** 检查更新（仅此时联网访问 GitHub API） */
     fun checkUpdate() {
         if (busy) return

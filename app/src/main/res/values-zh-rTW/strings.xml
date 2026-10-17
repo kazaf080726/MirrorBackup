@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">鏡像備份</string>
+    <string name="header_subtitle">作者：Kazaf · iOS 液態玻璃 · 多執行緒 · 僅儲存</string>
+    <string name="tab_backup">備份工作台</string>
+    <string name="tab_restore">還原工作台</string>
+    <string name="tab_settings">設定</string>
+    <string name="hero_working">運作正常</string>
+    <string name="hero_need_auth">需要授權</string>
+    <string name="hero_version">版本：v%1$s · %2$s</string>
+    <string name="hero_stats">%1$d 個分割區 · %2$d 核 · 滿核 %3$d 執行緒</string>
+    <string name="btn_start_backup">🚀 開始備份</string>
+    <string name="btn_stop_task">■ 停止任務</string>
+    <string name="sec_choose_mode">選擇備份模式</string>
+    <string name="mode_all">全部備份</string>
+    <string name="mode_all_desc">掃到多少備份多少\n含 super 與引導分割區</string>
+    <string name="mode_normal">普通備份</string>
+    <string name="mode_normal_desc">僅跳過 super / &gt;10GB\n（黑名單由你決定）</string>
+    <string name="mode_manual">手動備份</string>
+    <string name="mode_manual_desc">自行勾選\n需要備份的分割區</string>
+    <string name="mode_private">私有分割區備份</string>
+    <string name="mode_private_desc">僅 efs/nv/modem 等\n硬體私有分割區</string>
+    <string name="sec_threads">備份執行緒</string>
+    <string name="sec_format">鏡像儲存格式</string>
+    <string name="sec_records">備份記錄（提取歷史）</string>
+    <string name="sec_log">即時日誌</string>
+    <string name="theme_entry_title">🎨 主題設定</string>
+    <string name="theme_entry_desc">顏色模式 / Key color / Color Style / Color Spec / 液態玻璃</string>
+    <string name="storage_title">📁 儲存位置</string>
+    <string name="lang_title">🌐 語言</string>
+    <string name="lang_system">跟隨系統</string>
+    <string name="lang_zh_cn">简体中文</string>
+    <string name="lang_zh_tw">繁體中文</string>
+    <string name="lang_en">English</string>
+    <string name="check_update">檢查更新</string>
+    <string name="one_click_update">🚀 一鍵更新</string>
+    <string name="about_title">ℹ️ 關於</string>
+    <string name="storage_backup_dir">備份目錄</string>
+    <string name="storage_session_dir">工作階段目錄</string>
+    <string name="storage_session_desc">備份_日期_時間/（鏡像 + manifest + 雜湊）</string>
+    <string name="storage_granted">✅ 已授予所有檔案存取權限</string>
+    <string name="storage_not_granted">⚠ 未授權：備份將寫入應用程式私有目錄</string>
+    <string name="btn_recheck">重新檢查權限</string>
+    <string name="btn_grant">授予所有檔案存取權限</string>
+    <string name="btn_open_folder">開啟備份資料夾</string>
+    <string name="btn_verify_latest">校驗最近一次備份（SHA-256 逐鏡像比對）</string>
+</resources>

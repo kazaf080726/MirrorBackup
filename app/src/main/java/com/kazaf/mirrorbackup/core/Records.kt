@@ -80,4 +80,39 @@ object RecordsStore {
         } catch (_: Exception) {
         }
     }
+
+    /** 删除一条记录（按时间 + 类型 + 位置唯一定位） */
+    fun delete(context: Context, r: BackupRecord) {
+        try {
+            val list = load(context).filterNot {
+                it.time == r.time && it.type == r.type && it.location == r.location
+            }
+            val arr = JSONArray()
+            for (b in list) {
+                arr.put(
+                    JSONObject()
+                        .put("time", b.time)
+                        .put("type", b.type)
+                        .put("mode", b.mode)
+                        .put("threadMode", b.threadMode)
+                        .put("format", b.format)
+                        .put("packaged", b.packaged)
+                        .put("location", b.location)
+                        .put("imageCount", b.imageCount)
+                        .put("images", JSONArray(b.images))
+                        .put("totalBytes", b.totalBytes)
+                        .put("durationSec", b.durationSec)
+                )
+            }
+            file(context).writeText(arr.toString())
+        } catch (_: Exception) {
+        }
+    }
+
+    fun clear(context: Context) {
+        try {
+            file(context).delete()
+        } catch (_: Exception) {
+        }
+    }
 }

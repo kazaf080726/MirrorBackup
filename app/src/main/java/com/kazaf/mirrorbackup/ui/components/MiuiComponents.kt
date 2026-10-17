@@ -4,6 +4,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.border
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -21,7 +22,9 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -45,6 +48,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -52,6 +56,7 @@ import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -74,6 +79,10 @@ val LocalGlassSpecular = staticCompositionLocalOf { 1.0f }
 
 /** 主题：圆角基准值 */
 val LocalGlassCorner = staticCompositionLocalOf { 22.dp }
+val LocalCardTintAlpha = staticCompositionLocalOf { 0.42f }
+val LocalCardGlassEnabled = staticCompositionLocalOf { true }
+val LocalCompactLayout = staticCompositionLocalOf { false }
+val LocalUiStyle = staticCompositionLocalOf { "material" }
 
 /** 液态玻璃卡片：背景折射 + 镜面高光 + 渐变边缘光（iOS 27 风格，随主题配置） */
 @Composable
@@ -87,28 +96,36 @@ fun LiquidGlassCard(
     val glass = LocalLiquidGlassState.current
     val dark = isSystemInDarkTheme()
     val resolvedCorner = corner ?: LocalGlassCorner.current
-    val resolvedTint = tintAlpha ?: LocalGlassTintAlpha.current
+    val cardGlassEnabled = LocalCardGlassEnabled.current
+    val uiStyle = LocalUiStyle.current
+    val resolvedTint = when {
+        tintAlpha != null -> tintAlpha
+        uiStyle == "maple" -> (LocalCardTintAlpha.current * 0.85f)
+        else -> LocalCardTintAlpha.current
+    }
     val specularStrength = LocalGlassSpecular.current
     val shape = RoundedCornerShape(resolvedCorner)
     val m = modifier.shadow(
         16.dp, shape,
         spotColor = Color.Black.copy(alpha = if (dark) 0.4f else 0.12f)
     )
-    if (glass != null) {
+    if (glass != null && cardGlassEnabled) {
         Box(
             m.liquidGlass(
                 glass, shape, resolvedTint, specular, specularStrength, dark, resolvedCorner
             )
         ) {
-            Column(Modifier.padding(16.dp), content = content)
+            Column(Modifier.padding(if (LocalCompactLayout.current) 12.dp else 16.dp), content = content)
         }
     } else {
         Surface(
             m, shape = shape,
-            color = MaterialTheme.colorScheme.surface.copy(alpha = if (dark) 0.72f else 0.8f),
+            color = if (uiStyle == "maple")
+                (if (dark) Color(0xFF1E1730) else Color(0xFFF7F2FF)).copy(alpha = if (dark) 0.75f else 0.82f)
+            else MaterialTheme.colorScheme.surface.copy(alpha = if (dark) 0.72f else 0.8f),
             border = BorderStroke(1.dp, Color.White.copy(alpha = if (dark) 0.15f else 0.5f))
         ) {
-            Column(Modifier.padding(16.dp), content = content)
+            Column(Modifier.padding(if (LocalCompactLayout.current) 12.dp else 16.dp), content = content)
         }
     }
 }
@@ -206,14 +223,14 @@ fun CircularProgressRing(
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text(
                 if (indeterminate) "…" else f("%.0f%%", pct.coerceIn(0f, 1f) * 100),
-                fontSize = 17.sp,
+                fontSize = (size.value * 0.24f).sp,
                 fontWeight = FontWeight.Bold,
                 color = cs.onSurface
             )
             if (sub.isNotBlank()) {
                 Text(
                     sub,
-                    fontSize = 9.sp,
+                    fontSize = (size.value * 0.085f).sp,
                     color = cs.onSurfaceVariant,
                     maxLines = 1
                 )
@@ -222,12 +239,106 @@ fun CircularProgressRing(
     }
 }
 
-/** TWRP 风格终端日志窗口（带标题栏，自动滚动到底部） */
+/** 日志窗内的进度条：渐变填充 + 流光动效 + 速度/剩余时间 */
+@Composable
+private fun TerminalProgressBar(fraction: Float, label: String, detail: String) {
+    val animFraction by androidx.compose.animation.core.animateFloatAsState(
+        targetValue = fraction,
+        animationSpec = androidx.compose.animation.core.tween(420),
+        label = "log_progress"
+    )
+    // 有限流光（避免无限动画阻塞无障碍/测试）
+    val shimmer = remember { androidx.compose.animation.core.Animatable(0f) }
+    LaunchedEffect(Unit) {
+        repeat(5) {
+            shimmer.animateTo(1f, androidx.compose.animation.core.tween(1400, easing = androidx.compose.animation.core.LinearEasing))
+            shimmer.snapTo(0f)
+        }
+    }
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .background(Color.White.copy(alpha = 0.03f))
+            .padding(horizontal = 12.dp, vertical = 8.dp)
+    ) {
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                label,
+                fontSize = 10.sp,
+                fontFamily = FontFamily.Monospace,
+                color = MiuiColors.TerminalInfo,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f)
+            )
+            Text(
+                "${(animFraction * 100).toInt()}%",
+                fontSize = 11.sp,
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.Bold,
+                color = MiuiColors.TerminalProgress
+            )
+        }
+        Spacer(Modifier.height(5.dp))
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(7.dp)
+                .clip(RoundedCornerShape(999.dp))
+                .background(Color.White.copy(alpha = 0.08f))
+        ) {
+            Box(
+                Modifier
+                    .fillMaxWidth(animFraction.coerceIn(0f, 1f))
+                    .fillMaxHeight()
+                    .clip(RoundedCornerShape(999.dp))
+                    .background(
+                        Brush.horizontalGradient(
+                            listOf(Color(0xFF3E8BFF), Color(0xFF6FC3FF), Color(0xFF9AE6FF))
+                        )
+                    )
+            ) {
+                // 流光扫过
+                Box(
+                    Modifier
+                        .fillMaxHeight()
+                        .fillMaxWidth(0.35f)
+                        .offset(x = with(androidx.compose.ui.platform.LocalDensity.current) { (shimmer.value * 420).dp })
+                        .background(
+                            Brush.horizontalGradient(
+                                listOf(Color.Transparent, Color.White.copy(alpha = 0.55f), Color.Transparent)
+                            )
+                        )
+                )
+            }
+        }
+        if (detail.isNotBlank()) {
+            Spacer(Modifier.height(4.dp))
+            Text(
+                detail,
+                fontSize = 9.sp,
+                fontFamily = FontFamily.Monospace,
+                color = Color(0xFF6B7C90),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+    }
+}
+
+/** TWRP 风格终端日志窗口（带标题栏 + 进度条动效，自动滚动到底部） */
 @Composable
 fun TerminalLog(
     lines: List<LogLine>,
     modifier: Modifier = Modifier,
-    height: Dp = 300.dp
+    height: Dp = 300.dp,
+    progressFraction: Float? = null,
+    progressLabel: String = "",
+    progressDetail: String = ""
 ) {
     val listState = rememberLazyListState()
     LaunchedEffect(lines.size) {
@@ -262,6 +373,14 @@ fun TerminalLog(
                     letterSpacing = 1.5.sp,
                     fontFamily = FontFamily.Monospace,
                     color = Color(0xFF5A6B7E)
+                )
+            }
+            // ── 进度条（阶段 + 百分比 + 速度 + 动效流光）──
+            if (progressFraction != null) {
+                TerminalProgressBar(
+                    fraction = progressFraction.coerceIn(0f, 1f),
+                    label = progressLabel,
+                    detail = progressDetail
                 )
             }
             Box(Modifier.weight(1f)) {
@@ -471,6 +590,13 @@ fun ModeCard(
             )
         ) {
             ModeCardContent(selected, emoji, title, desc, accent, cs)
+            if (selected) {
+                Box(
+                    Modifier
+                        .matchParentSize()
+                        .border(1.8.dp, accent, shape)
+                )
+            }
         }
     } else {
         Surface(
@@ -493,13 +619,7 @@ private fun ModeCardContent(
     cs: androidx.compose.material3.ColorScheme
 ) {
     Box {
-        if (selected) {
-            Box(
-                Modifier
-                    .matchParentSize()
-                    .background(accent.copy(alpha = 0.10f))
-            )
-        }
+
         Box(Modifier.padding(14.dp)) {
         if (selected) {
             Surface(
@@ -606,7 +726,8 @@ fun FormatChip(
 fun RecordsCard(
     title: String,
     records: List<BackupRecord>,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onDelete: ((BackupRecord) -> Unit)? = null
 ) {
     var expanded by remember { mutableStateOf(false) }
     val cs = MaterialTheme.colorScheme
@@ -657,6 +778,15 @@ fun RecordsCard(
                                 color = if (r.packaged) MiuiColors.Green else MiuiColors.Orange,
                                 modifier = Modifier.weight(0.7f)
                             )
+                            if (onDelete != null) {
+                                Text(
+                                    "🗑",
+                                    fontSize = 12.sp,
+                                    modifier = Modifier
+                                        .clickable { onDelete(r) }
+                                        .padding(horizontal = 4.dp)
+                                )
+                            }
                         }
                     }
                 }

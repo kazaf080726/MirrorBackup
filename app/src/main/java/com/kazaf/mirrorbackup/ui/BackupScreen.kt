@@ -4,6 +4,9 @@ import android.content.Intent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -13,6 +16,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -33,6 +37,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -42,6 +47,7 @@ import com.kazaf.mirrorbackup.core.ThreadMode
 import com.kazaf.mirrorbackup.core.f
 import com.kazaf.mirrorbackup.core.fmtEta
 import com.kazaf.mirrorbackup.core.fmtSize
+import com.kazaf.mirrorbackup.R
 import com.kazaf.mirrorbackup.ui.components.CircularProgressRing
 import com.kazaf.mirrorbackup.ui.components.FloatingDock
 import com.kazaf.mirrorbackup.ui.components.FormatChip
@@ -159,6 +165,23 @@ fun BackupScreen(vm: BackupViewModel, onOpenRestore: () -> Unit) {
         ) {
             Spacer(Modifier.height(4.dp))
 
+            // ── KSU 状态卡（完整复刻 KernelSU Manager StatusCard）──
+            val suLabelNow = when {
+                vm.rootCheck == null -> "检测中…"
+                vm.rootCheck?.detail?.contains("ksu") == true -> "KernelSU"
+                vm.rootCheck?.detail?.contains("apatch") == true -> "APatch"
+                vm.rootCheck?.detail?.contains("magisk") == true -> "Magisk"
+                vm.rootCheck?.path?.contains("ksu") == true -> "KernelSU"
+                else -> "ROOT"
+            }
+            com.kazaf.mirrorbackup.ui.components.KsuStatusCard(
+                working = vm.rootOk,
+                title = if (vm.rootOk) "工作中" else "未授权",
+                versionLine = "版本：v" + com.kazaf.mirrorbackup.BuildConfig.VERSION_NAME,
+                modeLabel = suLabelNow,
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(Modifier.height(12.dp))
             if (progress.phase == BackupEngine.Phase.DONE) {
                 LiquidGlassCard(Modifier.fillMaxWidth()) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -175,13 +198,13 @@ fun BackupScreen(vm: BackupViewModel, onOpenRestore: () -> Unit) {
             }
 
             // ── 四种备份模式 ──
-            SectionTitle("选择备份模式")
+            SectionTitle(stringResource(R.string.sec_choose_mode))
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 ModeCard(
                     selected = vm.mode == BackupMode.ALL,
                     emoji = "🗂️",
-                    title = "全部备份",
-                    desc = "扫到多少备份多少\n含 super 与引导分区",
+                    title = stringResource(R.string.mode_all),
+                    desc = stringResource(R.string.mode_all_desc),
                     accent = MiuiColors.Blue,
                     onClick = { vm.chooseMode(BackupMode.ALL) },
                     modifier = Modifier.weight(1f)
@@ -189,8 +212,8 @@ fun BackupScreen(vm: BackupViewModel, onOpenRestore: () -> Unit) {
                 ModeCard(
                     selected = vm.mode == BackupMode.NORMAL,
                     emoji = "📦",
-                    title = "普通备份",
-                    desc = "仅跳过 super / >10GB\n（黑名单由你决定）",
+                    title = stringResource(R.string.mode_normal),
+                    desc = stringResource(R.string.mode_normal_desc),
                     accent = MiuiColors.Orange,
                     onClick = { vm.chooseMode(BackupMode.NORMAL) },
                     modifier = Modifier.weight(1f)
@@ -201,8 +224,8 @@ fun BackupScreen(vm: BackupViewModel, onOpenRestore: () -> Unit) {
                 ModeCard(
                     selected = vm.mode == BackupMode.MANUAL,
                     emoji = "✍️",
-                    title = "手动备份",
-                    desc = "自行勾选\n需要备份的分区",
+                    title = stringResource(R.string.mode_manual),
+                    desc = stringResource(R.string.mode_manual_desc),
                     accent = MiuiColors.Purple,
                     onClick = { vm.chooseMode(BackupMode.MANUAL) },
                     modifier = Modifier.weight(1f)
@@ -210,8 +233,8 @@ fun BackupScreen(vm: BackupViewModel, onOpenRestore: () -> Unit) {
                 ModeCard(
                     selected = vm.mode == BackupMode.PRIVATE,
                     emoji = "🧩",
-                    title = "私有分区备份",
-                    desc = "仅 efs/nv/modem 等\n硬件私有分区",
+                    title = stringResource(R.string.mode_private),
+                    desc = stringResource(R.string.mode_private_desc),
                     accent = MiuiColors.Green,
                     onClick = { vm.chooseMode(BackupMode.PRIVATE) },
                     modifier = Modifier.weight(1f)
@@ -243,8 +266,27 @@ fun BackupScreen(vm: BackupViewModel, onOpenRestore: () -> Unit) {
                             fontSize = 11.sp,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
+                        Spacer(Modifier.height(6.dp))
+                        androidx.compose.foundation.text.BasicTextField(
+                            value = vm.partitionQuery,
+                            onValueChange = { vm.updatePartitionQuery(it) },
+                            singleLine = true,
+                            textStyle = androidx.compose.ui.text.TextStyle(
+                                color = MaterialTheme.colorScheme.onSurface,
+                                fontSize = 13.sp
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 12.dp, vertical = 9.dp),
+                            decorationBox = { inner ->
+                                if (vm.partitionQuery.isBlank()) {
+                                    Text("🔍 搜索分区名…", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                                inner()
+                            }
+                        )
                         LazyColumn(Modifier.height(200.dp)) {
-                            items(vm.partitions) { part ->
+                            items(vm.filteredPartitions) { part ->
                                 val black = part.name in vm.userBlacklist
                                 val risky = com.kazaf.mirrorbackup.core.PartitionRules.isRisky(part.name)
                                 Row(
@@ -275,9 +317,15 @@ fun BackupScreen(vm: BackupViewModel, onOpenRestore: () -> Unit) {
                 }
             }
 
-            // ── 线程模式（默认多线程） ──
+            // ── 线程模式（默认多线程·自动满核） ──
             LiquidGlassCard(Modifier.fillMaxWidth()) {
-                SectionTitle("备份线程（默认多线程）")
+                SectionTitle(stringResource(R.string.sec_threads))
+                Text(
+                    "⚡ ${com.kazaf.mirrorbackup.core.CpuDetector.label}",
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(6.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     FormatChip(
                         title = "单线程",
@@ -294,8 +342,8 @@ fun BackupScreen(vm: BackupViewModel, onOpenRestore: () -> Unit) {
                         modifier = Modifier.weight(1f)
                     )
                     FormatChip(
-                        title = "多线程",
-                        desc = "4 线程",
+                        title = "满核",
+                        desc = "${ThreadMode.MULTI.count} 线程",
                         selected = vm.threadMode == ThreadMode.MULTI,
                         onClick = { vm.chooseThreadMode(ThreadMode.MULTI) },
                         modifier = Modifier.weight(1f)
@@ -306,7 +354,7 @@ fun BackupScreen(vm: BackupViewModel, onOpenRestore: () -> Unit) {
 
             // ── 镜像格式 ──
             LiquidGlassCard(Modifier.fillMaxWidth()) {
-                SectionTitle("镜像存储格式")
+                SectionTitle(stringResource(R.string.sec_format))
                 Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     FormatChip(
                         title = "RAW 原始镜像",
@@ -418,7 +466,8 @@ fun BackupScreen(vm: BackupViewModel, onOpenRestore: () -> Unit) {
                         } else 0f
                         CircularProgressRing(
                             pct = pct,
-                            size = 84.dp,
+                            size = 120.dp,
+                            stroke = 12.dp,
                             indeterminate = progress.phase == BackupEngine.Phase.PREFLIGHT
                         )
                         Spacer(Modifier.width(14.dp))
@@ -457,56 +506,82 @@ fun BackupScreen(vm: BackupViewModel, onOpenRestore: () -> Unit) {
 
             // ── 备份记录表 ──
             RecordsCard(
-                title = "备份记录（提取历史）",
-                records = vm.records.filter { it.type == "backup" }
+                title = stringResource(R.string.sec_records),
+                records = vm.records.filter { it.type == "backup" },
+                onDelete = { vm.deleteRecord(it) }
             )
             Spacer(Modifier.height(12.dp))
 
-            // ── 日志 ──
-            SectionTitle("实时日志")
-            TerminalLog(logLines, Modifier.fillMaxWidth(), height = 300.dp)
+            // ── 操作区（按你的要求放在日志上方，不再使用悬浮栏按钮）──
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                if (running || progress.phase == BackupEngine.Phase.WAITING_CHOICE) {
+                    MiuiButton(
+                        text = stringResource(R.string.btn_stop_task),
+                        onClick = { vm.stop() },
+                        danger = true,
+                        modifier = Modifier.weight(1f)
+                    )
+                } else {
+                    val canStart = vm.rootOk && (vm.mode != BackupMode.MANUAL || vm.manualSelection.isNotEmpty())
+                    MiuiButton(
+                        text = stringResource(R.string.btn_start_backup),
+                        onClick = {
+                            val total = vm.selectedTargets.sumOf { it.sizeBytes }
+                            if (total > 20L * 1024 * 1024 * 1024) {
+                                confirmBigTotal = total
+                            } else {
+                                vm.start()
+                            }
+                        },
+                        enabled = canStart,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
+            Spacer(Modifier.height(12.dp))
+
+            // ── 日志（含实时进度条 + 动效）──
+            SectionTitle(stringResource(R.string.sec_log))
+            val p = progress
+            val frac = if (p.bytesTotal > 0 &&
+                (p.phase == BackupEngine.Phase.BACKING_UP || p.phase == BackupEngine.Phase.VERIFYING)
+            ) (p.bytesDone.toFloat() / p.bytesTotal) else null
+            val phaseLabel = when (p.phase) {
+                BackupEngine.Phase.PREFLIGHT -> "安全前置校验中…"
+                BackupEngine.Phase.BACKING_UP -> "镜像提取中"
+                BackupEngine.Phase.VERIFYING -> "全量完整性校验（SHA-256 + CRC32 双重验证）"
+                BackupEngine.Phase.WAITING_CHOICE -> "等待选择打包方式…"
+                BackupEngine.Phase.DONE -> "备份完成"
+                BackupEngine.Phase.FAILED -> "任务失败"
+                BackupEngine.Phase.CANCELLED -> "已停止"
+                else -> ""
+            }
+            val etaText = if (p.etaSeconds <= 0) "—" else "%d:%02d".format(p.etaSeconds / 60, p.etaSeconds % 60)
+            val detailText = if (p.phase == BackupEngine.Phase.BACKING_UP && p.bytesTotal > 0) {
+                "%.1f MB/s · 剩余 %s · %s · %s / %s".format(
+                    p.speedMBps, etaText, p.partitionName,
+                    com.kazaf.mirrorbackup.core.fmtSize(p.bytesDone),
+                    com.kazaf.mirrorbackup.core.fmtSize(p.bytesTotal)
+                )
+            } else p.detail
+            TerminalLog(
+                logLines,
+                Modifier.fillMaxWidth(),
+                height = 300.dp,
+                progressFraction = frac,
+                progressLabel = phaseLabel,
+                progressDetail = detailText
+            )
 
             // 底部留白，避免被悬浮栏遮挡
             Spacer(Modifier.height(96.dp))
         }
 
-        // ── 底部悬浮操作栏 ──
-        FloatingDock(
-            Modifier
-                .align(Alignment.BottomCenter)
-                .padding(start = 16.dp, end = 16.dp, bottom = 108.dp)
-                .fillMaxWidth()
-        ) {
-            if (running || progress.phase == BackupEngine.Phase.WAITING_CHOICE) {
-                MiuiButton(
-                    text = "■ 停止任务",
-                    onClick = { vm.stop() },
-                    danger = true,
-                    modifier = Modifier.weight(1f)
-                )
-            } else {
-                val canStart = rootOk && (vm.mode != BackupMode.MANUAL || vm.manualSelection.isNotEmpty())
-                MiuiButton(
-                    text = "🚀 开始备份",
-                    onClick = {
-                        val total = vm.selectedTargets.sumOf { it.sizeBytes }
-                        if (total > 20L * 1024 * 1024 * 1024) {
-                            confirmBigTotal = total
-                        } else {
-                            vm.start()
-                        }
-                    },
-                    enabled = canStart,
-                    modifier = Modifier.weight(1.3f)
-                )
-                TextButton(
-                    onClick = onOpenRestore,
-                    modifier = Modifier.weight(1f)
-                ) {
-                    Text("📥 恢复工作台", fontSize = 13.sp)
-                }
-            }
-        }
+        // （底部悬浮操作栏已移除：操作按钮移至日志上方）
+
     }
 }
 

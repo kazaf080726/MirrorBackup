@@ -298,47 +298,8 @@ fun RestoreScreen(vm: RestoreViewModel) {
             Spacer(Modifier.height(96.dp))
         }
 
-        // ── 底部悬浮操作栏 ──
-        FloatingDock(
-            Modifier
-                .align(Alignment.BottomCenter)
-                .padding(start = 16.dp, end = 16.dp, bottom = 108.dp)
-                .fillMaxWidth()
-        ) {
-            val busy = vm.busy
-            if (busy) {
-                MiuiButton(
-                    text = "■ 停止任务",
-                    onClick = { vm.stop() },
-                    danger = true,
-                    modifier = Modifier.weight(1f)
-                )
-            } else {
-                val l = loaded
-                if (l == null) {
-                    MiuiButton(
-                        text = "📥 导入ZIP备份包",
-                        onClick = { openLauncher.launch(arrayOf("application/zip", "application/octet-stream")) },
-                        modifier = Modifier.weight(1f)
-                    )
-                } else {
-                    val blockedByBlack = l.blacklistedNames.isNotEmpty() || l.invalidNames.isNotEmpty()
-                    val allOk = l.previews.isNotEmpty() && l.previews.all { it.shaOk == true && it.sizeOk }
-                    MiuiButton(
-                        text = "① 校验完整性",
-                        onClick = { vm.verify() },
-                        enabled = !blockedByBlack,
-                        modifier = Modifier.weight(1f)
-                    )
-                    MiuiButton(
-                        text = "② 执行恢复",
-                        onClick = { vm.restore() },
-                        enabled = allOk && l.fingerprintMatch && !blockedByBlack,
-                        modifier = Modifier.weight(1f)
-                    )
-                }
-            }
-        }
+        // （重复的底部悬浮栏已移除：操作入口见页面内按钮）
+
     }
 }
 

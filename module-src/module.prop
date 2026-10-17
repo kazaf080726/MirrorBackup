@@ -1,7 +1,7 @@
 id=mirrorbackup_module
 name=镜像备份 提取辅助模块
-version=v1.1.0
-versionCode=110
+version=v2.1.0
+versionCode=210
 author=Kazaf
-description=为「镜像备份」App 提供提取辅助二进制：img2simg / simg2img（AOSP libsparse）、mb_parts（极速分区枚举）、mb_dd（dd+内置SHA-256单进程提取）。支持 Magisk / KernelSU / APatch，自带 update.json 可在管理器内直接升级。
+description=接口扫描与提取辅助：mb_scan（分区/路径/环境扫描，适配不同机型）、mb_info（设备与 Root 环境信息）、mb_verify（单文件 SHA-256 校验助手）、mb_parts、mb_dd、img2simg / simg2img。支持 Magisk / KernelSU / APatch，自带 update.json 可在管理器内升级。
 updateJson=https://raw.githubusercontent.com/kazaf080726/MirrorBackup/main/module/update.json

@@ -118,9 +118,27 @@ object SuManager {
 
         fun exitCode(): Int = if (p.isAlive) -1 else p.exitValue()
 
-        fun stdoutText(): String = outBuf.toString()
+        /** 等待读取线程把管道残留数据全部读尽（避免输出被截断） */
+        private fun joinReaders() {
+            try {
+                t1.join(2000)
+            } catch (_: Exception) {
+            }
+            try {
+                t2.join(2000)
+            } catch (_: Exception) {
+            }
+        }
 
-        fun stderrText(): String = errBuf.toString()
+        fun stdoutText(): String {
+            joinReaders()
+            return outBuf.toString()
+        }
+
+        fun stderrText(): String {
+            joinReaders()
+            return errBuf.toString()
+        }
 
         fun stdin(): java.io.OutputStream = p.outputStream
 

@@ -1,5 +1,12 @@
 package com.kazaf.mirrorbackup.ui
 
+import android.content.Intent
+import android.net.Uri
+import android.os.Environment
+import android.provider.DocumentsContract
+import android.provider.Settings
+import com.kazaf.mirrorbackup.R
+import com.kazaf.mirrorbackup.core.OutputStore
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -23,6 +30,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -39,10 +47,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.kazaf.mirrorbackup.core.AccentPresets
 import com.kazaf.mirrorbackup.core.DISCLAIMER_TEXT
 import com.kazaf.mirrorbackup.core.PartitionRules
 import com.kazaf.mirrorbackup.core.ThemeConfig
@@ -60,7 +68,7 @@ import com.kazaf.mirrorbackup.viewmodel.SettingsViewModel
 
 /** Tab3：⚙️ 设置（检查更新 / 提取辅助模块 / 用户黑名单 / 关于） */
 @Composable
-fun SettingsScreen(settingsVm: SettingsViewModel, backupVm: BackupViewModel) {
+fun SettingsScreen(settingsVm: SettingsViewModel, backupVm: BackupViewModel, onOpenTheme: () -> Unit = {}) {
     val logLines by settingsVm.log.lines.collectAsState()
     val checking = settingsVm.checking
     val busy = settingsVm.busy
@@ -73,6 +81,7 @@ fun SettingsScreen(settingsVm: SettingsViewModel, backupVm: BackupViewModel) {
     LaunchedEffect(Unit) {
         backupVm.syncBlacklist()
         settingsVm.refreshModuleStatus()
+        settingsVm.loadDeviceEnv()
     }
 
     Column(
@@ -84,7 +93,163 @@ fun SettingsScreen(settingsVm: SettingsViewModel, backupVm: BackupViewModel) {
         Spacer(Modifier.height(4.dp))
 
         // ── 主题与外观（照搬 KernelSU / SukiSU 管理器主题设置） ──
-        ThemeSection()
+        LiquidGlassCard(Modifier.fillMaxWidth()) {
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clickable(onClick = onOpenTheme)
+                    .padding(vertical = 4.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Column {
+                    Text(stringResource(R.string.theme_entry_title), fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                    Text(
+                        stringResource(R.string.theme_entry_desc),
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Text("›", fontSize = 22.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        Spacer(Modifier.height(10.dp))
+
+        // ── 语言 / Language ──
+        LiquidGlassCard(Modifier.fillMaxWidth()) {
+            val act = LocalContext.current
+            SectionTitle(stringResource(R.string.lang_title))
+            var lang by remember { mutableStateOf(com.kazaf.mirrorbackup.core.LocaleHelper.current(act)) }
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                com.kazaf.mirrorbackup.core.LocaleHelper.OPTIONS.chunked(2).forEach { rowTags ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        rowTags.forEach { tag ->
+                    val label = when (tag) {
+                        "" -> stringResource(R.string.lang_system)
+                        "zh-CN" -> stringResource(R.string.lang_zh_cn)
+                        "zh-TW" -> stringResource(R.string.lang_zh_tw)
+                        else -> stringResource(R.string.lang_en)
+                    }
+                    val selected = lang == tag
+                    Surface(
+                        modifier = Modifier.weight(1f),
+                        onClick = {
+                            lang = tag
+                            com.kazaf.mirrorbackup.core.LocaleHelper.setLanguage(act, tag)
+                            (act as? android.app.Activity)?.recreate()
+                        },
+                        shape = RoundedCornerShape(999.dp),
+                        color = if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.18f)
+                        else MaterialTheme.colorScheme.surface.copy(alpha = 0.5f),
+                        border = androidx.compose.foundation.BorderStroke(
+                            1.dp,
+                            if (selected) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)
+                        )
+                    ) {
+                        Text(
+                            label,
+                            fontSize = 12.sp,
+                            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                            maxLines = 1,
+                            color = if (selected) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp)
+                        )
+                    }
+                        }
+                    }
+                }
+            }
+        }
+        Spacer(Modifier.height(10.dp))
+
+        // ── 存储位置（内部存储根目录「镜像备份」文件夹）──
+        LiquidGlassCard(Modifier.fillMaxWidth()) {
+            SectionTitle(stringResource(R.string.storage_title))
+            val ctx = LocalContext.current
+            val allFiles = remember { mutableStateOf(OutputStore.hasAllFilesAccess()) }
+            InfoLine(stringResource(R.string.storage_backup_dir), OutputStore.rootPath)
+            InfoLine(stringResource(R.string.storage_session_dir), stringResource(R.string.storage_session_desc))
+            Spacer(Modifier.height(4.dp))
+            if (allFiles.value) {
+                StatusBadge(stringResource(R.string.storage_granted), MiuiColors.Green)
+            } else {
+                StatusBadge(stringResource(R.string.storage_not_granted), MiuiColors.Orange)
+            }
+            Spacer(Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                MiuiButton(
+                    text = stringResource(if (allFiles.value) R.string.btn_recheck else R.string.btn_grant),
+                    onClick = {
+                        if (Environment.isExternalStorageManager()) {
+                            allFiles.value = true
+                        } else {
+                            try {
+                                ctx.startActivity(
+                                    Intent(
+                                        Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                                        Uri.parse("package:${ctx.packageName}")
+                                    )
+                                )
+                            } catch (e: Exception) {
+                                try {
+                                    ctx.startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+                                } catch (_: Exception) {
+                                }
+                            }
+                        }
+                    },
+                    modifier = Modifier.weight(1f)
+                )
+                MiuiButton(
+                    text = stringResource(R.string.btn_open_folder),
+                    onClick = {
+                        try {
+                            val uri = DocumentsContract.buildDocumentUri(
+                                "com.android.externalstorage.documents",
+                                "primary:${OutputStore.ROOT_NAME}"
+                            )
+                            ctx.startActivity(
+                                Intent(Intent.ACTION_VIEW)
+                                    .setDataAndType(uri, DocumentsContract.Document.MIME_TYPE_DIR)
+                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            )
+                    } catch (e: Exception) {
+                        // 文件管理器不支持时打开系统「所有文件」设置页兜底
+                        try {
+                            ctx.startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+                        } catch (_: Exception) {
+                        }
+                    }
+                    },
+                    modifier = Modifier.weight(1f)
+                )
+            }
+            Spacer(Modifier.height(8.dp))
+            MiuiButton(
+                text = stringResource(R.string.btn_verify_latest),
+                onClick = { settingsVm.verifyLatestBackup() },
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+        Spacer(Modifier.height(10.dp))
+
+        // ── 设备环境（模块 mb_info 提供）──
+        val env = settingsVm.deviceEnv
+        if (env != null) {
+            LiquidGlassCard(Modifier.fillMaxWidth()) {
+                SectionTitle("📟 设备环境")
+                InfoLine("设备型号", "${env["ro.product.manufacturer"] ?: ""} ${env["ro.product.model"] ?: "?"}")
+                InfoLine("系统版本", "Android ${env["ro.build.version.release"] ?: "?"} / SDK ${env["ro.build.version.sdk"] ?: "?"}")
+                InfoLine("安全补丁", env["ro.build.version.security_patch"] ?: "?")
+                InfoLine("内核版本", env["kernel"] ?: "?")
+                InfoLine("CPU / 架构", "${env["cpu_cores"] ?: "?"} 核 · ${env["arch"] ?: "?"}")
+                InfoLine("A/B 槽位", env["ro.boot.slot_suffix"] ?: "none")
+                InfoLine("数据来源", env["_src"] ?: "shell")
+            }
+            Spacer(Modifier.height(10.dp))
+        }
 
         // ── 版本与更新 ──
         LiquidGlassCard(Modifier.fillMaxWidth()) {
@@ -275,198 +440,6 @@ private fun InfoLine(label: String, value: String) {
             fontWeight = FontWeight.Medium,
             color = MaterialTheme.colorScheme.onSurface,
             fontFamily = if (value.length > 24) FontFamily.Monospace else FontFamily.Default
-        )
-    }
-}
-
-/** 🎨 主题与外观 —— 照搬 KernelSU / SukiSU 管理器主题设置体系 */
-@Composable
-private fun ThemeSection() {
-    val context = LocalContext.current
-    val cfg = ThemeState.config
-    fun upd(t: ThemeConfig.() -> ThemeConfig) {
-        ThemeState.update(context, t)
-    }
-    val cs = MaterialTheme.colorScheme
-
-    LiquidGlassCard(Modifier.fillMaxWidth()) {
-        SectionTitle("🎨 主题与外观")
-
-        // ── Theme：颜色模式 ──
-        Text("Theme（颜色模式）", fontSize = 12.sp, color = cs.onSurfaceVariant)
-        Spacer(Modifier.height(6.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            ThemeChip("跟随系统", cfg.colorMode == "system") { upd { copy(colorMode = "system") } }
-            ThemeChip("浅色", cfg.colorMode == "light") { upd { copy(colorMode = "light") } }
-            ThemeChip("深色", cfg.colorMode == "dark") { upd { copy(colorMode = "dark") } }
-            ThemeChip("AMOLED 黑", cfg.colorMode == "amoled") { upd { copy(colorMode = "amoled") } }
-        }
-        Spacer(Modifier.height(12.dp))
-
-        // ── Color Spec：Monet 动态取色 ──
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column {
-                Text("启用 Monet 配色", fontSize = 13.sp, fontWeight = FontWeight.Medium)
-                Text(
-                    "Material You 动态取色（Android 12+）",
-                    fontSize = 10.sp,
-                    color = cs.onSurfaceVariant
-                )
-            }
-            Switch(
-                checked = cfg.monetEnabled,
-                onCheckedChange = { upd { copy(monetEnabled = it) } },
-                enabled = android.os.Build.VERSION.SDK_INT >= 31
-            )
-        }
-        Spacer(Modifier.height(10.dp))
-
-        // ── Key color：强调色板 + 自定义色调 ──
-        Text("Key color（强调色）", fontSize = 12.sp, color = cs.onSurfaceVariant)
-        Spacer(Modifier.height(6.dp))
-        AccentPresets.LIST.chunked(5).forEach { rowPresets ->
-            Row(
-                Modifier.padding(vertical = 4.dp),
-                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                rowPresets.forEach { preset ->
-                    val selected = !cfg.monetEnabled && cfg.accent == preset.argb
-                    Box(
-                        Modifier
-                            .size(30.dp)
-                            .clickable { upd { copy(monetEnabled = false, accent = preset.argb) } },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Box(
-                            Modifier
-                                .matchParentSize()
-                                .background(Color(preset.argb), CircleShape)
-                        )
-                        if (selected) {
-                            Box(
-                                Modifier
-                                    .matchParentSize()
-                                    .border(2.dp, cs.onSurface, CircleShape)
-                            )
-                        }
-                    }
-                }
-            }
-        }
-        val hue = remember(cfg.accent) {
-            val hsv = FloatArray(3)
-            android.graphics.Color.colorToHSV(cfg.accent.toInt(), hsv)
-            hsv[0]
-        }
-        Text(
-            "自定义色调: ${"%.0f".format(hue)}°（Monet 关闭时生效）",
-            fontSize = 11.sp,
-            color = cs.onSurfaceVariant
-        )
-        Slider(
-            value = hue,
-            onValueChange = { h ->
-                val argb = android.graphics.Color.HSVToColor(floatArrayOf(h, 0.72f, 1.0f))
-                upd { copy(monetEnabled = false, accent = (0xFF000000L or (argb.toLong() and 0xFFFFFFL))) }
-            },
-            valueRange = 0f..360f
-        )
-        Spacer(Modifier.height(8.dp))
-
-        // ── 液态玻璃 ──
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text("液态玻璃", fontSize = 13.sp, fontWeight = FontWeight.Medium)
-            Switch(checked = cfg.glassEnabled, onCheckedChange = { upd { copy(glassEnabled = it) } })
-        }
-        if (cfg.glassEnabled) {
-            Text("玻璃强度（折射模糊半径）", fontSize = 11.sp, color = cs.onSurfaceVariant)
-            Spacer(Modifier.height(4.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                ThemeChip("弱", cfg.glassStrength == 0) { upd { copy(glassStrength = 0) } }
-                ThemeChip("中", cfg.glassStrength == 1) { upd { copy(glassStrength = 1) } }
-                ThemeChip("强", cfg.glassStrength == 2) { upd { copy(glassStrength = 2) } }
-            }
-            Text(
-                "透明度 ${"%.0f".format(cfg.glassTintAlpha * 100)}%",
-                fontSize = 11.sp,
-                color = cs.onSurfaceVariant
-            )
-            Slider(
-                value = cfg.glassTintAlpha,
-                onValueChange = { upd { copy(glassTintAlpha = it) } },
-                valueRange = 0.30f..0.72f
-            )
-            Text(
-                "镜面高光 ${"%.0f".format(cfg.specularStrength * 100)}%",
-                fontSize = 11.sp,
-                color = cs.onSurfaceVariant
-            )
-            Slider(
-                value = cfg.specularStrength,
-                onValueChange = { upd { copy(specularStrength = it) } },
-                valueRange = 0.3f..1.6f
-            )
-        }
-        Spacer(Modifier.height(8.dp))
-
-        // ── 圆角大小 ──
-        Text("圆角大小", fontSize = 11.sp, color = cs.onSurfaceVariant)
-        Spacer(Modifier.height(4.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            ThemeChip("14", cfg.cornerRadius == 14) { upd { copy(cornerRadius = 14) } }
-            ThemeChip("18", cfg.cornerRadius == 18) { upd { copy(cornerRadius = 18) } }
-            ThemeChip("22", cfg.cornerRadius == 22) { upd { copy(cornerRadius = 22) } }
-            ThemeChip("28", cfg.cornerRadius == 28) { upd { copy(cornerRadius = 28) } }
-        }
-        Spacer(Modifier.height(10.dp))
-
-        // ── 背景光晕 ──
-        Row(
-            Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column {
-                Text("背景光晕", fontSize = 13.sp, fontWeight = FontWeight.Medium)
-                Text("蓝紫渐变光斑呼吸动画", fontSize = 10.sp, color = cs.onSurfaceVariant)
-            }
-            Switch(checked = cfg.glowEnabled, onCheckedChange = { upd { copy(glowEnabled = it) } })
-        }
-    }
-    Spacer(Modifier.height(12.dp))
-}
-
-@Composable
-private fun ThemeChip(label: String, selected: Boolean, onClick: () -> Unit) {
-    val cs = MaterialTheme.colorScheme
-    Box(
-        Modifier
-            .clickable(onClick = onClick)
-            .background(
-                if (selected) cs.primary.copy(alpha = 0.16f) else cs.surface.copy(alpha = 0.6f),
-                RoundedCornerShape(999.dp)
-            )
-            .border(
-                1.dp,
-                if (selected) cs.primary else cs.outline.copy(alpha = 0.4f),
-                RoundedCornerShape(999.dp)
-            )
-            .padding(horizontal = 12.dp, vertical = 6.dp)
-    ) {
-        Text(
-            label,
-            fontSize = 12.sp,
-            fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
-            color = if (selected) cs.primary else cs.onSurfaceVariant
         )
     }
 }
