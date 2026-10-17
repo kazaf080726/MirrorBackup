@@ -33,7 +33,7 @@ class UnpackEngine(private val appContext: android.content.Context) {
         val message: String = ""
     )
 
-    val log = LogBuffer()
+    val log = LogBuffer().also { it.attachFile(java.io.File(appContext.filesDir, "logs/app.log")) }
     private val _state = MutableStateFlow(State())
     val state: StateFlow<State> = _state
 
@@ -119,77 +119,57 @@ class UnpackEngine(private val appContext: android.content.Context) {
 
     // ── payload.bin ──────────────────────────────────────────────
     private suspend fun unpackPayload(file: File, outDir: File, threads: Int, selected: List<String>? = null) {
-        _state.value = _state.value.copy(running = true, message = "读取 payload 清单…")
-        // 若是 zip（卡刷包），先把其中的 payload.bin 抽取到缓存
-        val payloadPath: String = if (file.name.endsWith(".zip", true) || isZip(file)) {
+        _state.value = _state.value.copy(running = true, message = "准备解包…")
+        // 取得 payload 路径（zip 先取 payload.bin）
+        val payloadPath: String = if (jniPayloadPath.isNotEmpty()) {
+            jniPayloadPath
+        } else if (isZip(file)) {
             val entryName = try {
                 ZipFile(file).use { z ->
                     z.entries().toList().firstOrNull {
                         !it.isDirectory && it.name.substringAfterLast('/').equals("payload.bin", true)
                     }?.name
                 }
-            } catch (e: Exception) {
-                null
-            }
+            } catch (e: Exception) { null }
             if (entryName == null) {
                 log.error("❌ 压缩包内没有 payload.bin")
-                _state.value = _state.value.copy(running = false, message = "包内无 payload.bin")
+                _state.value = _state.value.copy(running = false)
                 return
             }
             val cache = File(appContext.cacheDir, "payload_extract.bin")
-            log.info("ZIP 内 payload.bin: $entryName（先解出到缓存）")
-            ZipFile(file).use { z ->
-                val entry = z.getEntry(entryName)
-                z.getInputStream(entry).use { input ->
-                    cache.outputStream().use { out ->
-                        val buf = ByteArray(1024 * 1024)
-                        var total = 0L
-                        while (true) {
-                            if (cancelled) break
-                            val n = input.read(buf)
-                            if (n <= 0) break
-                            out.write(buf, 0, n)
-                            total += n
-                            if (total % (64L * 1024 * 1024) < 1024 * 1024) {
-                                log.progress("zipentry", "   ↻ 解析 payload.bin: " + fmtSize(total))
-                            }
-                        }
+            if (!cache.exists() || cache.length() == 0L) {
+                log.info("ZIP 内 payload.bin: $entryName（取出中）")
+                ZipFile(file).use { z ->
+                    val entry = z.getEntry(entryName)
+                    z.getInputStream(entry).use { input ->
+                        cache.outputStream().use { out -> input.copyTo(out, 4 * 1024 * 1024) }
                     }
                 }
             }
-            log.ok("✔ payload.bin 已取出: " + fmtSize(cache.length()))
+            log.ok("✔ payload.bin: " + fmtSize(cache.length()))
+            jniPayloadPath = cache.absolutePath
             cache.absolutePath
         } else {
             file.absolutePath
         }
 
-        val raf = RandomAccessFile(payloadPath, "r")
-        val magic = ByteArray(4).also { raf.readFully(it) }
-        if (String(magic) != "CrAU") {
-            log.error("❌ 不是有效的 payload.bin（magic=${String(magic)}）")
-            raf.close()
+        val parts = if (jniPartitions.isEmpty()) jniList(payloadPath) else jniPartitions
+        if (parts.isEmpty()) {
+            log.error("❌ 无法读取分区清单")
+            _state.value = _state.value.copy(running = false)
             return
         }
-        val version = readU64(raf)
-        val manifestSize = readU64(raf)
-        if (version == 2L) raf.skipBytes(24)
-        val manifestBytes = ByteArray(manifestSize.toInt().coerceAtMost(256 * 1024 * 1024))
-        raf.readFully(manifestBytes)
-        raf.close()
-        val partitions = PayloadManifest.parse(manifestBytes)
-        if (partitions.isEmpty()) {
-            log.error("❌ 未能解析到分区清单")
-            _state.value = _state.value.copy(running = false, message = "分区清单为空")
-            return
-        }
-        val targets = partitions.filter { selected == null || it.name in selected }
-        log.info("分区 ${partitions.size} 个 · 本次解包 ${targets.size} 个 · 线程 $threads")
-        _state.value = _state.value.copy(total = targets.size, message = "解包中…")
+        val targets = parts.filter { selected == null || it.name in selected }
+        val totalBytes = targets.sumOf { it.size }
+        log.info("═══ 开始解包（" + (if (selected == null) "全量" else "部分") + "：${targets.size} 个分区 · $threads 线程）═══")
+        _state.value = _state.value.copy(total = targets.size, done = 0, totalBytes = totalBytes, doneBytes = 0, message = "解包中…")
 
         val dumper = com.rhythmcache.payloaddumper.PayloadDumper.INSTANCE
         val sem = Semaphore(threads)
         val startedAt = System.nanoTime()
         var bytesDone = 0L
+        var okCount = 0
+        var failCount = 0
         val lock = Any()
         try {
             coroutineScope {
@@ -198,9 +178,9 @@ class UnpackEngine(private val appContext: android.content.Context) {
                         sem.withPermit {
                             if (cancelled) return@withPermit
                             val t0 = System.nanoTime()
-                            var lastStep = 0
+                            var lastPct = 0.0
+                            val outFile = File(outDir, part.name + ".img")
                             try {
-                                val outFile = File(outDir, part.name + ".img")
                                 dumper.extractLocalPartition(
                                     payloadPath,
                                     part.name,
@@ -208,52 +188,35 @@ class UnpackEngine(private val appContext: android.content.Context) {
                                     null,
                                     object : com.rhythmcache.payloaddumper.PayloadDumper.ProgressCallback {
                                         override fun onProgress(
-                                            partitionName: String,
-                                            currentOperation: Long,
-                                            totalOperations: Long,
-                                            percentage: Double,
-                                            status: Int,
-                                            warningOpIndex: Int,
-                                            warningMessage: String
+                                            partitionName: String, currentOperation: Long, totalOperations: Long,
+                                            percentage: Double, status: Int, warningOpIndex: Int, warningMessage: String
                                         ): Boolean {
                                             val pct = (percentage * 100.0).coerceIn(0.0, 100.0)
-                                            if (pct.toInt() / 2 != lastStep / 2) {
-                                                lastStep = pct.toInt()
-                                                val done = (pct / 100.0 * part.sizeBytes).toLong()
+                                            if (pct - lastPct >= 2.0 || pct >= 100.0) {
+                                                lastPct = pct
+                                                val done = (pct / 100.0 * part.size).toLong()
                                                 val dt = (System.nanoTime() - t0) / 1e9
-                                                val speed = if (dt > 0.2) done / dt / 1e6 else 0.0
-                                                log.progress(
-                                                    "p:${part.name}",
-                                                    f("   ↻ %s: %.0f%%  %s / %s  %.1f MB/s  (%d/%d op)",
-                                                        part.name, pct, fmtSize(done), fmtSize(part.sizeBytes), speed,
-                                                        currentOperation, totalOperations)
-                                                )
+                                                val sp = if (dt > 0.2) done / dt / 1e6 else 0.0
+                                                log.progress("j:${part.name}", f("   ↻ %s: %.0f%%  %s / %s  %.1f MB/s", part.name, pct, fmtSize(done), fmtSize(part.size), sp))
                                             }
-                                            if (warningMessage.isNotEmpty()) {
-                                                log.warn("⚠ ${part.name}: $warningMessage")
-                                            }
+                                            if (warningMessage.isNotEmpty()) log.warn("⚠ ${part.name}: $warningMessage")
                                             return !cancelled
                                         }
                                     }
                                 )
                                 val secs = ((System.nanoTime() - t0) / 1e9).coerceAtLeast(0.001)
-                                log.ok(
-                                    f("✔ %s.img 完成  %s  %.1f MB/s  %.1fs",
-                                        part.name, fmtSize(part.sizeBytes), part.sizeBytes / secs / 1e6, secs)
-                                )
+                                val realSize = outFile.length()
+                                log.ok(f("✔ %s.img 完成  %s  实际 %s  %.1f MB/s  %.1fs", part.name, fmtSize(part.size), fmtSize(realSize), part.size / secs / 1e6, secs))
+                                synchronized(lock) { okCount++ }
                             } catch (e: Throwable) {
-                                log.error("❌ ${part.name} 解包失败: ${e.message}")
+                                log.error("❌ ${part.name} 失败: ${e.javaClass.simpleName}: ${e.message}")
+                                synchronized(lock) { failCount++ }
                             } finally {
                                 synchronized(lock) {
-                                    bytesDone += part.sizeBytes
+                                    bytesDone += part.size
                                     val elapsed = (System.nanoTime() - startedAt) / 1e9
-                                    val s = _state.value
-                                    _state.value = s.copy(
-                                        done = s.done + 1,
-                                        doneBytes = bytesDone,
-                                        totalBytes = targets.sumOf { it.sizeBytes },
-                                        speedMbps = if (elapsed > 0.2) bytesDone / elapsed / 1e6 else 0.0
-                                    )
+                                    val s2 = _state.value
+                                    _state.value = s2.copy(done = s2.done + 1, doneBytes = bytesDone, speedMbps = if (elapsed > 0.2) bytesDone / elapsed / 1e6 else 0.0)
                                 }
                             }
                         }
@@ -263,8 +226,12 @@ class UnpackEngine(private val appContext: android.content.Context) {
         } catch (e: Exception) {
             log.error("❌ 解包异常: ${e.message}")
         }
+        if (!cancelled) {
+            val totalSecs = (System.nanoTime() - startedAt) / 1e9
+            log.ok(f("✔✔✔ 解包结束：成功 %d 个 / 失败 %d 个 · 总耗时 %.1fs · 输出 %s", okCount, failCount, totalSecs, outDir.absolutePath))
+            _state.value = _state.value.copy(running = false, message = if (failCount == 0) "解包完成" else "部分失败")
+        }
     }
-
     // ── 严格流程：① 分析 ② 前置校验 ─────────────────
     data class Analysis(
         val isPayload: Boolean = false,
@@ -278,6 +245,34 @@ class UnpackEngine(private val appContext: android.content.Context) {
         val error: String = ""
     )
 
+    data class JPart(val name: String, val size: Long, val ops: Int, val compression: String, val hash: String)
+
+    var jniPartitions: List<JPart> = emptyList()
+        private set
+
+    var jniPayloadPath: String = ""
+        private set
+
+    /** 用本机原生库读取分区清单（zip 会先取出 payload.bin） */
+    private fun jniList(path: String): List<JPart> {
+        return try {
+            val json = com.rhythmcache.payloaddumper.PayloadDumper.INSTANCE.listLocalPartitions(path)
+            val arr = org.json.JSONObject(json).optJSONArray("partitions") ?: return emptyList()
+            (0 until arr.length()).mapNotNull { i ->
+                val o = arr.optJSONObject(i) ?: return@mapNotNull null
+                JPart(
+                    name = o.optString("name"),
+                    size = o.optLong("size_bytes"),
+                    ops = o.optInt("operations_count"),
+                    compression = o.optString("compression_type"),
+                    hash = o.optString("hash")
+                )
+            }.filter { it.name.isNotEmpty() }
+        } catch (e: Throwable) {
+            log.error("❌ 原生清单读取失败: ${e.javaClass.simpleName}: ${e.message}")
+            emptyList()
+        }
+    }
     var analysis: Analysis? = null
         private set
 
@@ -329,36 +324,56 @@ class UnpackEngine(private val appContext: android.content.Context) {
     }
 
     private fun analyzePayloadFile(f: File): Analysis {
-        try {
+        // 优先使用本机原生库（完整支持 xz，且给出精确分区/hash）
+        val jni = jniList(f.absolutePath)
+        if (jni.isNotEmpty()) {
+            jniPartitions = jni
+            jniPayloadPath = f.absolutePath
+            val total = jni.sumOf { it.size }
+            log.ok("✔ payload.bin 结构完整（原生解析）")
+            log.info("   分区 ${jni.size} 个 · 解包后总量 ${fmtSize(total)}")
+            val comp = jni.count { it.compression.isNotEmpty() && it.compression != "none" }
+            log.info("   压缩类型: xz $comp 个 · 已带 SHA-256 校验值 ${jni.count { it.hash.isNotEmpty() }} 个")
+            jni.take(60).forEach { p ->
+                log.info("   · ${p.name}  ${fmtSize(p.size)}  ${p.ops} op  ${p.compression}")
+            }
+            if (jni.size > 60) log.info("   … 其余 ${jni.size - 60} 个分区")
+            return Analysis(
+                isPayload = true, isZip = true,
+                partitions = jni.map { it.name to it.size },
+                totalOutBytes = total,
+                version = 2, manifestSize = 0, compressedOps = comp, rawOps = jni.sumOf { it.ops } - comp
+            )
+        }
+        // 兜底：本地 Kotlin 解析
+        return try {
             RandomAccessFile(f, "r").use { raf ->
                 val magic = ByteArray(4); raf.readFully(magic)
                 if (String(magic) != "CrAU") return Analysis(error = "magic 错误: ${String(magic)}")
                 val version = readU64(raf)
                 val manifestSize = readU64(raf)
                 if (version == 2L) raf.skipBytes(24)
-                if (manifestSize <= 0 || manifestSize > f.length()) return Analysis(error = "manifest 长度非法: $manifestSize")
-                val mb = ByteArray(manifestSize.toInt())
+                val mb = ByteArray(manifestSize.toInt().coerceAtMost(256 * 1024 * 1024))
                 raf.readFully(mb)
                 val parts = PayloadManifest.parse(mb)
-                var raw = 0; var comp = 0
-                val list = parts.map { p ->
-                    p.operations.forEach { op -> if (op.type.contains("XZ") || op.type.contains("BZ")) comp++ else raw++ }
-                    p.name to p.sizeBytes
-                }
-                val total = parts.sumOf { it.sizeBytes }
-                log.ok("✔ payload.bin 结构完整（CrAU）")
-                log.info("   版本 $version · manifest ${fmtSize(manifestSize)}")
-                log.info("   分区 ${parts.size} 个 · 解包后总量 ${fmtSize(total)}")
-                log.info("   操作项: 未压缩 $raw / 压缩 $comp（压缩由内置 xz 解包器处理）")
-                list.take(50).forEach { (n, s) -> log.info("   · $n  ${fmtSize(s)}") }
-                if (list.size > 50) log.info("   … 其余 ${list.size - 50} 个分区")
-                return Analysis(true, true, list, total, version, manifestSize, comp, raw)
+                Analysis(true, true, parts.map { it.name to it.sizeBytes }, parts.sumOf { it.sizeBytes }, version, manifestSize)
             }
         } catch (e: Exception) {
-            return Analysis(error = "分析异常: ${e.message}")
+            Analysis(error = "分析异常: ${e.message}")
         }
     }
-
+    /** JNI 探测（诊断用） */
+    suspend fun jniProbe(path: String? = null) = withContext(Dispatchers.IO) {
+        val p = path ?: File(appContext.cacheDir, "probe_payload.bin").takeIf { it.exists() }?.absolutePath
+        if (p == null) { log.warn("⚠ 没有可探测的 payload 文件"); return@withContext }
+        log.info("═══ JNI 探测 ═══ $p (${fmtSize(File(p).length())})")
+        val list = jniList(p)
+        if (list.isNotEmpty()) {
+            jniPartitions = list
+            jniPayloadPath = p
+            log.ok("✔ 原生分区清单: ${list.size} 个 · 总量 ${fmtSize(list.sumOf { it.size })}")
+        }
+    }
     suspend fun preVerify(): Boolean = withContext(Dispatchers.IO) {
         val a = analysis ?: return@withContext false
         log.info("═══ ② 前置校验 ═══")

@@ -124,6 +124,36 @@ class UnpackViewModel(app: Application) : AndroidViewModel(app) {
             if (!ok) engine.log.warn("⚠ 安装未成功，请在文件管理器手动安装 cache/payload_dumper.apk")
         }
     }
+    fun probe() { viewModelScope.launch { engine.jniProbe() } }
+
+    var showPartPicker by mutableStateOf(false)
+        private set
+    var selectedParts by mutableStateOf<Set<String>>(emptySet())
+        private set
+
+    fun openPartPicker() {
+        if (engine.jniPartitions.isEmpty()) {
+            viewModelScope.launch { engine.jniProbe() }
+        }
+        showPartPicker = true
+    }
+
+    fun togglePart(name: String, on: Boolean) {
+        selectedParts = if (on) selectedParts + name else selectedParts - name
+    }
+
+    fun closePartPicker() { showPartPicker = false }
+
+    fun startSelected() {
+        val f = pickedFile ?: return
+        val sel = selectedParts.toList()
+        if (sel.isEmpty()) return
+        showPartPicker = false
+        if (engine.state.value.running) return
+        viewModelScope.launch { engine.unpack(f, threads.coerceIn(1, 16), sel) }
+    }
+
+
     fun clearScan() { scanResults = emptyList() }
 
     fun pick(file: File) {
@@ -248,6 +278,14 @@ fun UnpackScreen(vm: UnpackViewModel) {
                     modifier = Modifier.weight(1f)
                 )
                 MiuiButton(
+                    text = "JNI 探测",
+                    onClick = { vm.probe() },
+                    modifier = Modifier.weight(1f)
+                )
+            }
+            Spacer(Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                MiuiButton(
                     text = "分析包结构",
                     onClick = { vm.analyze() },
                     enabled = vm.pickedFile != null,
@@ -354,6 +392,14 @@ fun UnpackScreen(vm: UnpackViewModel) {
 
         // 操作按钮
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            if (vm.engine.jniPartitions.isNotEmpty()) {
+                MiuiButton(
+                    text = "选择分区解包（${vm.engine.jniPartitions.size} 个）",
+                    onClick = { vm.openPartPicker() },
+                    modifier = Modifier.weight(1f)
+                )
+                Spacer(Modifier.width(8.dp))
+            }
             if (state.running) {
                 MiuiButton(
                     text = stringResource(R.string.unpack_stop),
@@ -371,6 +417,38 @@ fun UnpackScreen(vm: UnpackViewModel) {
             }
         }
         Spacer(Modifier.height(12.dp))
+
+        if (vm.showPartPicker) {
+            androidx.compose.material3.AlertDialog(
+                onDismissRequest = { vm.closePartPicker() },
+                title = { Text("选择要解包的分区") },
+                text = {
+                    Column(Modifier.heightIn(max = 460.dp).verticalScroll(rememberScrollState())) {
+                        vm.engine.jniPartitions.forEach { p ->
+                            Row(
+                                Modifier.fillMaxWidth().clickable { vm.togglePart(p.name, p.name !in vm.selectedParts) },
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                androidx.compose.material3.Checkbox(
+                                    checked = p.name in vm.selectedParts,
+                                    onCheckedChange = { on -> vm.togglePart(p.name, on) }
+                                )
+                                Text(p.name, fontSize = 12.sp, modifier = Modifier.weight(1f))
+                                Text(fmtSize(p.size), fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                    }
+                },
+                confirmButton = {
+                    androidx.compose.material3.TextButton(onClick = { vm.startSelected() }) {
+                        Text("开始解包（${vm.selectedParts.size}）")
+                    }
+                },
+                dismissButton = {
+                    androidx.compose.material3.TextButton(onClick = { vm.closePartPicker() }) { Text("取消") }
+                }
+            )
+        }
 
         SectionTitle(stringResource(R.string.unpack_log))
         TerminalLog(lines, Modifier.fillMaxWidth(), height = 280.dp)
