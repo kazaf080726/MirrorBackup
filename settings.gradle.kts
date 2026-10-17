@@ -19,3 +19,5 @@ dependencyResolutionManagement {
 
 rootProject.name = "MirrorBackup"
 include(":app")
+// 电脑端恢复流程模拟测试（不是 Android 模块，只在 PC 上跑）
+include(":restore-harness")

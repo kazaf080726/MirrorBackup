@@ -363,62 +363,48 @@ class RestoreEngine(
                 setProgress(Progress(Phase.VERIFYING, name, 0, part.sizeBytes, 0.0, ""))
                 log.info("  正在双重校验 ${name}（SHA-256 + ZIP CRC32，只读提取）…")
 
-                val digest = MessageDigest.getInstance("SHA-256")
-                val crc = CRC32()
-                val checked = DoubleCheckStream(zip, digest, crc)
-                var expanded: Long
-                try {
-                    if (part.format == "sparse") {
-                        expanded = LibSparse.decode(checked, null) { done ->
-                            setProgress(Progress(Phase.VERIFYING, name, done, part.sizeBytes, 0.0, ""))
-                        }
-                    } else {
-                        expanded = 0L
-                        val buf = ByteArray(1024 * 1024)
-                        var lastReport = 0L
-                        while (true) {
-                            val n = checked.read(buf)
-                            if (n < 0) break
-                            expanded += n
-                            if (expanded - lastReport >= 32L * 1024 * 1024) {
-                                lastReport = expanded
-                                setProgress(Progress(Phase.VERIFYING, name, expanded, part.sizeBytes, 0.0, ""))
-                                log.progress("vh:$name", f("   ↻ 校验 %s: %s", name, fmtSize(expanded)))
-                            }
+                // 校验逻辑与电脑端模拟测试共用同一份纯 JVM 实现（RestoreVerify）
+                val check = com.kazaf.mirrorbackup.core.pure.RestoreVerify.verifyEntry(
+                    name = name,
+                    format = part.format,
+                    declaredSize = part.sizeBytes,
+                    declaredSha256 = part.sha256,
+                    crcStored = e.crc,
+                    input = zip,
+                    onProgress = { done ->
+                        setProgress(Progress(Phase.VERIFYING, name, done, part.sizeBytes, 0.0, ""))
+                        if (done > 0 && done % (32L * 1024 * 1024) < (1024 * 1024)) {
+                            log.progress("vh:$name", f("   ↻ 校验 %s: %s", name, fmtSize(done)))
                         }
                     }
-                } catch (ex: Exception) {
-                    log.error("❌ ${name} 镜像结构损坏: ${ex.message}")
+                )
+                val expanded = check.expandedBytes
+                try {
+                    zip.closeEntry()
+                } catch (_: Exception) {
+                }
+
+                if (check.structureError != null) {
+                    log.error("❌ ${name} 镜像结构损坏: ${check.structureError}")
                     states[name] = PartitionPreview(
                         name, part.format, part.sizeBytes, part.sha256,
                         targets.containsKey(name), targets[name]?.sizeBytes ?: 0L,
                         shaOk = false, message = "镜像结构损坏"
                     )
-                    try {
-                        zip.closeEntry()
-                    } catch (_: Exception) {
-                    }
                     continue
                 }
-
-                val actualHash = digest.digest().joinToString("") { "%02x".format(it) }
-                val hashOk = actualHash.equals(part.sha256, ignoreCase = true)
-                val sizeConsistent = expanded == part.sizeBytes
-                zip.closeEntry()
-                val storedCrc = e.crc
-                val crcOk = storedCrc == -1L || storedCrc == crc.value
-                if (hashOk && sizeConsistent && crcOk) {
+                if (check.ok) {
                     log.ok("✔ ${name}: 双重校验通过（SHA-256 一致 + ZIP CRC32 一致），展开 ${fmtSize(expanded)}")
                 } else {
-                    if (!hashOk) log.error("❌ ${name}: SHA-256 不一致！ manifest=${part.sha256.take(16)}… 实际=${actualHash.take(16)}…")
-                    if (!sizeConsistent) log.error("❌ ${name}: 展开大小 ${expanded} 与 manifest 记录 ${part.sizeBytes} 不一致")
-                    if (!crcOk) log.error("❌ ${name}: ZIP CRC32 不一致！ 记录=${"%08x".format(storedCrc)} 实际=${"%08x".format(crc.value)}")
+                    if (!check.shaOk) log.error("❌ ${name}: SHA-256 不一致！ manifest=${part.sha256.take(16)}… 实际=${check.actualSha256.take(16)}…")
+                    if (!check.sizeOk) log.error("❌ ${name}: 展开大小 ${expanded} 与 manifest 记录 ${part.sizeBytes} 不一致")
+                    if (!check.crcOk) log.error("❌ ${name}: ZIP CRC32 不一致！ 记录=${"%08x".format(check.crcStored)} 实际=${"%08x".format(check.crcActual)}")
                 }
                 states[name] = PartitionPreview(
                     name, part.format, part.sizeBytes, part.sha256,
                     targets.containsKey(name), targets[name]?.sizeBytes ?: 0L,
-                    shaOk = hashOk && sizeConsistent && crcOk,
-                    message = if (hashOk && sizeConsistent && crcOk) "" else "校验失败"
+                    shaOk = check.ok,
+                    message = if (check.ok) "" else "校验失败"
                 )
                 count++
             }
@@ -450,34 +436,21 @@ class RestoreEngine(
         var lastReport = 0L
         try {
             val stdin = BufferedOutputStream(proc.stdin(), 1024 * 1024)
-            if (part.format == "sparse") {
-                val expanded = LibSparse.decode(zip, stdin) { done ->
-                    written = done
+            // 写入逻辑与电脑端模拟测试共用（RestoreVerify.writeEntry）
+            written = com.kazaf.mirrorbackup.core.pure.RestoreVerify.writeEntry(
+                input = zip,
+                out = stdin,
+                format = part.format,
+                onProgress = { done ->
                     if (done - lastReport >= 32L * 1024 * 1024 || done >= part.sizeBytes) {
                         lastReport = done
                         setProgress(Progress(Phase.RESTORING, part.name, done, part.sizeBytes, 0.0, ""))
                         log.progress("wr:${part.name}", f("   ↻ 写入 %s: %s/%s", part.name, fmtSize(done), fmtSize(part.sizeBytes)))
                     }
                 }
-                if (expanded != part.sizeBytes) {
-                    throw RestoreAbort("分区 ${part.name} 稀疏展开大小 $expanded 与 manifest 记录 ${part.sizeBytes} 不一致，已中断")
-                }
-            } else {
-                val buf = ByteArray(1024 * 1024)
-                while (true) {
-                    val n = zip.read(buf)
-                    if (n < 0) break
-                    stdin.write(buf, 0, n)
-                    written += n
-                    if (written - lastReport >= 32L * 1024 * 1024 || written >= part.sizeBytes) {
-                        lastReport = written
-                        setProgress(Progress(Phase.RESTORING, part.name, written, part.sizeBytes, 0.0, ""))
-                        log.progress("wr:${part.name}", f("   ↻ 写入 %s: %s/%s", part.name, fmtSize(written), fmtSize(part.sizeBytes)))
-                    }
-                }
-                if (written != part.sizeBytes) {
-                    throw RestoreAbort("分区 ${part.name} 镜像字节数 $written 与 manifest 记录 ${part.sizeBytes} 不一致，已中断")
-                }
+            )
+            if (written != part.sizeBytes) {
+                throw RestoreAbort("分区 ${part.name} 写入字节数 $written 与 manifest 记录 ${part.sizeBytes} 不一致，已中断")
             }
             stdin.flush()
             proc.closeStdin()
@@ -512,33 +485,3 @@ class RestoreEngine(
     }
 }
 
-/**
- * 双重校验流：读取的同时更新 SHA-256 与 CRC32，
- * 保证校验阶段为纯只读提取，不产生任何写入。
- */
-private class DoubleCheckStream(
-    private val base: InputStream,
-    private val md: MessageDigest,
-    private val crc: CRC32
-) : InputStream() {
-
-    override fun read(): Int {
-        val b = base.read()
-        if (b >= 0) {
-            md.update(b.toByte())
-            crc.update(b)
-        }
-        return b
-    }
-
-    override fun read(b: ByteArray, off: Int, len: Int): Int {
-        val n = base.read(b, off, len)
-        if (n > 0) {
-            md.update(b, off, n)
-            crc.update(b, off, n)
-        }
-        return n
-    }
-
-    override fun close() = base.close()
-}
