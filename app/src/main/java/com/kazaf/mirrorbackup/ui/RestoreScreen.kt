@@ -273,10 +273,18 @@ fun RestoreScreen(vm: RestoreViewModel) {
             } ?: run {
                 LiquidGlassCard {
                     Text(
-                        "尚未导入备份包。\n点击底部悬浮栏【导入ZIP备份包】，选择本应用导出的压缩文件。",
+                        "尚未导入备份包。\n点下方按钮选择本应用导出的 ZIP 备份包。",
                         fontSize = 13.sp,
                         lineHeight = 20.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.height(10.dp))
+                    MiuiButton(
+                        text = "📦 导入 ZIP 备份包",
+                        onClick = {
+                            openLauncher.launch(arrayOf("application/zip", "application/octet-stream", "*/*"))
+                        },
+                        modifier = Modifier.fillMaxWidth()
                     )
                 }
                 Spacer(Modifier.height(12.dp))

@@ -118,6 +118,12 @@ class BackupEngine(
         _packPrompt.value = null
         packAnswer = null
         log.clear()
+        // 开跑前清理临时垃圾（缓存副本 / 上次残留的 *.dd.err / 空会话目录）
+        run {
+            val st = TempCleaner.Stats()
+            TempCleaner.cleanBackup(context, st)
+            if (!st.isEmpty()) log.info("🧹 已清理临时文件 ${st.summary()}")
+        }
         setProgress(Progress(Phase.PREFLIGHT, "", 0, 0, 0.0, 0, "安全前置校验中…"))
         log.info("═══ 镜像备份任务开始 ═══")
         log.info("备份模式: ${mode.label} | 线程: ${threadMode.label}(${threadMode.count}) | 镜像格式: ${if (sparse) "SPARSE 稀疏镜像" else "RAW 原始镜像"}")
@@ -294,6 +300,12 @@ class BackupEngine(
                     workDir.deleteRecursively()
                 } catch (_: Exception) {
                 }
+            }
+            // 收尾清理：临时错误输出 / 空会话目录 / 缓存副本
+            run {
+                val st = TempCleaner.Stats()
+                TempCleaner.cleanBackup(context, st)
+                if (!st.isEmpty()) log.info("🧹 任务结束已清理临时文件 ${st.summary()}")
             }
         }
     }

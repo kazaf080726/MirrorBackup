@@ -79,6 +79,13 @@ class UnpackEngine(private val appContext: android.content.Context) {
             }
         } finally {
             if (!cancelled) log.ok("✔ 解包完成") else log.warn("⏹ 已停止")
+            // 停止时把半成品输出目录标记出来，避免看起来像完整解包结果
+            if (cancelled && outDir.exists()) {
+                val marked = File(outDir.parentFile, outDir.name + "_未完成")
+                runCatching { outDir.renameTo(marked) }.onSuccess {
+                    if (it) log.info("📁 半成品输出已标记为 ${marked.name}")
+                }
+            }
             _state.value = _state.value.copy(
                 running = false,
                 current = "",
@@ -402,31 +409,17 @@ class UnpackEngine(private val appContext: android.content.Context) {
     }
 
     // ── 缓存 / 临时目录清理 ────────────────────────────────
-    private fun sizeOf(f: File): Long = if (f.isDirectory) {
-        (f.listFiles() ?: emptyArray()).sumOf { sizeOf(it) }
-    } else f.length()
-
     /**
-     * 任务开始前清理：删掉缓存目录里的临时拷贝、别的包留下的 payload 缓存、输出根目录里的空目录。
+     * 任务开始前清理：通用缓存临时副本 + 别的包留下的 payload 拷贝 + 输出目录空目录。
      * 属于「当前源包」的 payload 缓存保留（同一次会话里 分析 → 解包 不必重复取 8GB）。
      */
     fun cleanupTemps(currentSource: File?) {
+        val stats = TempCleaner.Stats()
+        // 三台共用的缓存临时副本（SAF 落地副本、旧内嵌 APK、诊断/基准产物）+ 输出目录空目录
+        TempCleaner.cleanUnpack(appContext, stats)
+        // 本包以外的 payload 临时拷贝
         val prefix = currentSource?.absolutePath?.let { "$it|" }
-        var freed = 0L
         runCatching {
-            // SAF 选择文件时的落盘副本
-            File(appContext.cacheDir, "unpack").listFiles()?.forEach { f ->
-                freed += sizeOf(f); f.deleteRecursively()
-            }
-            // 旧版本内嵌安装包残留 / 诊断自检与基准产物
-            listOf("payload_dumper.apk", "selftest").forEach { name ->
-                val f = File(appContext.cacheDir, name)
-                if (f.exists()) { freed += sizeOf(f); f.deleteRecursively() }
-            }
-            appContext.cacheDir.listFiles()?.forEach { f ->
-                if (f.name.startsWith("bench_")) { freed += sizeOf(f); f.deleteRecursively() }
-            }
-            // payload 临时拷贝
             appContext.cacheDir.listFiles()?.forEach { f ->
                 if (f.name == "probe_payload.bin" || f.name == "payload_extract.bin") {
                     val meta = File(appContext.cacheDir, f.name + ".meta")
@@ -434,25 +427,19 @@ class UnpackEngine(private val appContext: android.content.Context) {
                         meta.readText().trim().startsWith(prefix)
                     }.getOrDefault(false)
                     if (!mine) {
-                        freed += sizeOf(f); f.delete()
-                        if (meta.exists()) { freed += meta.length(); meta.delete() }
+                        stats.record(TempCleaner.sizeOf(f)); f.delete()
+                        if (meta.exists()) { stats.record(meta.length()); meta.delete() }
                     }
                 }
             }
-            // 输出根目录里的空目录（取消/失败留下的）
-            File("/storage/emulated/0/解包工具箱").listFiles()?.forEach { d ->
-                if (d.isDirectory && (d.listFiles()?.isEmpty() != false)) {
-                    freed += sizeOf(d); d.deleteRecursively()
-                }
-            }
         }
-        if (freed > 0) log.info("🧹 已清理临时文件 ${fmtSize(freed)}")
+        if (!stats.isEmpty()) log.info("🧹 已清理临时文件 ${stats.summary()}")
     }
 
     /** 任务结束后清理：本包的 payload 临时拷贝 + 临时目录一律删掉，不留垃圾 */
     fun purgeTaskCache(source: File) {
         val prefix = source.absolutePath + "|"
-        var freed = 0L
+        val stats = TempCleaner.Stats()
         runCatching {
             appContext.cacheDir.listFiles()?.forEach { f ->
                 if (f.name == "probe_payload.bin" || f.name == "payload_extract.bin") {
@@ -461,16 +448,14 @@ class UnpackEngine(private val appContext: android.content.Context) {
                         meta.readText().trim().startsWith(prefix)
                     }.getOrDefault(false)
                     if (mine) {
-                        freed += sizeOf(f); f.delete()
-                        if (meta.exists()) { freed += meta.length(); meta.delete() }
+                        stats.record(TempCleaner.sizeOf(f)); f.delete()
+                        if (meta.exists()) { stats.record(meta.length()); meta.delete() }
                     }
                 }
             }
-            File(appContext.cacheDir, "unpack").listFiles()?.forEach { f ->
-                freed += sizeOf(f); f.deleteRecursively()
-            }
         }
-        if (freed > 0) log.info("🧹 任务结束已清理临时文件 ${fmtSize(freed)}")
+        TempCleaner.cleanUnpack(appContext, stats)
+        if (!stats.isEmpty()) log.info("🧹 任务结束已清理临时文件 ${stats.summary()}")
     }
     // ── 严格流程：① 分析 ② 前置校验 ─────────────────
     data class Analysis(
@@ -536,7 +521,8 @@ class UnpackEngine(private val appContext: android.content.Context) {
     suspend fun analyze(file: File) = withContext(Dispatchers.IO) {
         analysis = null
         log.clear()
-        _state.value = _state.value.copy(analyzing = true, analyzeStep = "读取包结构…", message = "正在分析…")
+        // 重置上一次解包残留的进度，并对「分析中」状态置位
+        _state.value = State(analyzing = true, analyzeStep = "读取包结构…", message = "正在分析…", file = file.name)
         try {
             log.info("═══ ① 包分析 ═══")
             log.info("文件: ${file.name} (${fmtSize(file.length())})")
@@ -581,7 +567,12 @@ class UnpackEngine(private val appContext: android.content.Context) {
             analysis = a
             a
         } finally {
-            _state.value = _state.value.copy(analyzing = false, analyzeStep = "")
+            val ok = analysis?.let { it.error.isEmpty() && it.partitions.isNotEmpty() } == true
+            _state.value = _state.value.copy(
+                analyzing = false,
+                analyzeStep = "",
+                message = if (ok) "分析完成 · ${analysis?.partitions?.size ?: 0} 个分区" else "分析失败"
+            )
         }
     }
 

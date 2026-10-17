@@ -85,6 +85,12 @@ class RestoreEngine(
         setProgress(Progress(Phase.LOADING, "", 0, 0, 0.0, "正在解析备份包…"))
         log.clear()
         log.info("═══ 恢复工作台 ═══")
+        // 解析前先清临时垃圾（上次恢复留下的 dd 错误输出 / 缓存副本）
+        run {
+            val st = TempCleaner.Stats()
+            TempCleaner.cleanRestore(context, st)
+            if (!st.isEmpty()) log.info("🧹 已清理临时文件 ${st.summary()}")
+        }
         log.info("正在导入并解析 ZIP 备份包…")
 
         var manifest: BackupManifest? = null
@@ -316,6 +322,11 @@ class RestoreEngine(
         } catch (e: Exception) {
             log.error("❌ 恢复失败: ${e.message}")
             setProgress(Progress(Phase.FAILED, "", 0, 0, 0.0, e.message ?: "恢复失败"))
+        } finally {
+            // 收尾清理：本次恢复产生的 dd 错误输出等临时文件
+            val st = TempCleaner.Stats()
+            TempCleaner.cleanRestore(context, st)
+            if (!st.isEmpty()) log.info("🧹 任务结束已清理临时文件 ${st.summary()}")
         }
     }
 

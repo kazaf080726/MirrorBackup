@@ -394,10 +394,18 @@ fun UnpackScreen(vm: UnpackViewModel) {
                     Spacer(Modifier.width(14.dp))
                     Column {
                         Text(state.message, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                        Text("${state.done} / ${state.total}", fontSize = 12.sp)
+                        Text("${state.done} / ${state.total} 个分区", fontSize = 12.sp)
                         if (state.totalBytes > 0) {
                             Text(
-                                fmtSize(state.doneBytes) + " / " + fmtSize(state.totalBytes),
+                                fmtSize(state.doneBytes) + " / " + fmtSize(state.totalBytes) +
+                                    (if (state.running && state.speedMbps > 0) "  ·  " + f("%.1f", state.speedMbps) + " MB/s" else ""),
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        if (state.running && state.current.isNotEmpty()) {
+                            Text(
+                                "当前: ${state.current}  ${state.pct}%",
                                 fontSize = 11.sp,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -559,50 +567,5 @@ fun UnpackScreen(vm: UnpackViewModel) {
         )
     }
 
-    // ── 解包中：实时进度弹窗（可停止） ──
-    if (state.running) {
-        val total = state.total.coerceAtLeast(0)
-        val done = state.done.coerceAtLeast(0)
-        androidx.compose.material3.AlertDialog(
-            onDismissRequest = { },
-            title = { Text(if (total > 0) "正在解包…" else "正在准备…") },
-            text = {
-                Column {
-                    if (total > 0) {
-                        androidx.compose.material3.LinearProgressIndicator(
-                            progress = { (done.toFloat() / total).coerceIn(0f, 1f) },
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                    } else {
-                        androidx.compose.material3.LinearProgressIndicator(Modifier.fillMaxWidth())
-                    }
-                    Spacer(Modifier.height(10.dp))
-                    Text(
-                        if (total > 0) "已完成 $done / $total 个分区" else "正在取出 payload.bin / 读取清单…",
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Medium
-                    )
-                    if (state.totalBytes > 0) {
-                        Text(
-                            fmtSize(state.doneBytes) + " / " + fmtSize(state.totalBytes) +
-                                "  ·  " + f("%.1f", state.speedMbps) + " MB/s",
-                            fontSize = 11.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                    if (state.current.isNotEmpty()) {
-                        Spacer(Modifier.height(4.dp))
-                        Text(
-                            "当前: ${state.current}  ${state.pct}%",
-                            fontSize = 11.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
-            },
-            confirmButton = {
-                androidx.compose.material3.TextButton(onClick = { vm.stop() }) { Text("停止") }
-            }
-        )
-    }
+    // ── 解包中：不弹窗，进度看页面里的进度卡（可随时点「停止」） ──
 }
