@@ -1,6 +1,12 @@
 # 更新日志
 ## App v2.8.2（2026-10-18 恢复流程改成可在电脑上验证 + PC 模拟测试全绿）
 
+### 🧩 模块 v2.2.0（220）与 APK 同版发布
+- 之前几个 Release 只放 APK、没有模块 zip，导致模块管理器没法更新
+- 从这版起模块 zip 固定与 APK 同一 Release 发布；`module/update.json` 指向本 Release 的模块资产
+- App 内「检查更新」同时识别模块资产（`mirrorbackup-module-*.zip`，按文件名解析 versionCode）
+- 模块内容与 v2.1.0 相同，只改版本号与更新通道
+
 ### 🧪 恢复工作台：校验/写入核心抽成纯 JVM 代码
 - 把「镜像校验（SHA-256 + ZIP CRC32 + 展开大小）」和「写入分区（raw 直通 / sparse 展开）」
   抽到 `core/pure/RestoreVerify.kt`，**不含任何 Android 依赖**，APP 与电脑测试跑的是同一份代码
