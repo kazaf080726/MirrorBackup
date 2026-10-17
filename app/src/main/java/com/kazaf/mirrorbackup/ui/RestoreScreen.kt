@@ -95,6 +95,21 @@ fun RestoreScreen(vm: RestoreViewModel) {
         }
     }
 
+    // TWRP 注入：选 twrp.img
+    val twrpLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            try {
+                context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            } catch (_: Exception) {
+            }
+            vm.pickTwrp(uri)
+        }
+    }
+
+    LaunchedEffect(Unit) { vm.detectTwrpSupport() }
+
     // 恢复中止警报弹窗
     var alertDismissed by remember { mutableStateOf(false) }
     LaunchedEffect(progress.phase) {
@@ -124,6 +139,10 @@ fun RestoreScreen(vm: RestoreViewModel) {
 
             // ── 单分区刷入（.img）──
             FlashCard(vm, onPick = { imgLauncher.launch(arrayOf("*/*")) })
+            Spacer(Modifier.height(12.dp))
+
+            // ── TWRP 注入（A/B）──
+            TwrpCard(vm, onPickTwrp = { twrpLauncher.launch(arrayOf("*/*")) })
             Spacer(Modifier.height(12.dp))
 
             vm.loadError?.let { err ->
@@ -506,6 +525,20 @@ private fun FlashCard(vm: RestoreViewModel, onPick: () -> Unit) {
             danger = true,
             modifier = Modifier.fillMaxWidth()
         )
+
+        if (target != null) {
+            Spacer(Modifier.height(8.dp))
+            MiuiButton(
+                text = "导出该分区镜像 → /sdcard/${target.name}.img",
+                onClick = { vm.exportTarget() },
+                enabled = !vm.exportBusy && !vm.flashBusy,
+                modifier = Modifier.fillMaxWidth()
+            )
+            vm.exportResult?.let {
+                Spacer(Modifier.height(6.dp))
+                Text(it, fontSize = 11.sp, color = if (it.startsWith("✔")) MiuiColors.Green else MiuiColors.Red)
+            }
+        }
     }
 
     // ── 手动选分区 ──
@@ -551,9 +584,10 @@ private fun FlashCard(vm: RestoreViewModel, onPick: () -> Unit) {
                         Text("镜　　像：${prepared.meta.fileName}  ${fmtSize(prepared.meta.bytes)}", fontSize = 11.sp)
                         Text("SHA-256：${prepared.meta.sha256}", fontSize = 9.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         Spacer(Modifier.height(6.dp))
-                        Text("将执行：", fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                        Text("将执行（Scene flash_image 同等逻辑）：", fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
                         Text(
-                            "dd of='${t.path}' bs=1048576 conv=fsync",
+                            "flash_image '${prepared.meta.fileName}' '${t.path}'\n" +
+                                "→ 校验镜像≤分区大小 → blockdev --setrw → 写入镜像 → 0 填充到分区末尾",
                             fontSize = 10.sp,
                             fontFamily = FontFamily.Monospace,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -579,3 +613,48 @@ private fun FlashCard(vm: RestoreViewModel, onPick: () -> Unit) {
     }
 }
 
+
+/* ────────── TWRP 注入（A/B）────────── */
+
+@Composable
+private fun TwrpCard(vm: RestoreViewModel, onPickTwrp: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    LiquidGlassCard(Modifier.fillMaxWidth()) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("TWRP 注入（A/B）", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.weight(1f))
+            if (vm.twrpBusy) CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+        }
+        Spacer(Modifier.height(4.dp))
+        Text("与 Scene 相同：A/B 设备把 twrp 的 ramdisk 换进 boot_a/boot_b 后分别刷入；有 recovery_a 则直接刷 recovery。", fontSize = 11.sp, color = cs.onSurfaceVariant)
+        Spacer(Modifier.height(6.dp))
+        Text(
+            "设备判定：" + vm.twrpModeText.ifEmpty { "检测中…" },
+            fontSize = 11.sp,
+            color = if (vm.twrpModeText.startsWith("支持")) MiuiColors.Green else cs.onSurfaceVariant
+        )
+        Spacer(Modifier.height(8.dp))
+        MiuiButton(
+            text = if (vm.twrpFile == null) "选择 twrp.img" else "重新选择 twrp.img",
+            onClick = onPickTwrp,
+            enabled = !vm.twrpBusy,
+            modifier = Modifier.fillMaxWidth()
+        )
+        vm.twrpFile?.let {
+            Spacer(Modifier.height(6.dp))
+            Text("${it.name}  ${fmtSize(it.length())}", fontSize = 12.sp, fontWeight = FontWeight.Medium)
+        }
+        Spacer(Modifier.height(8.dp))
+        MiuiButton(
+            text = "开始注入 TWRP",
+            onClick = { vm.injectTwrp() },
+            enabled = vm.twrpFile != null && !vm.twrpBusy && vm.twrpModeText.startsWith("支持"),
+            danger = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+        vm.twrpResult?.let {
+            Spacer(Modifier.height(6.dp))
+            Text(it, fontSize = 11.sp, color = if (vm.twrpResultOk) MiuiColors.Green else MiuiColors.Red)
+        }
+    }
+}

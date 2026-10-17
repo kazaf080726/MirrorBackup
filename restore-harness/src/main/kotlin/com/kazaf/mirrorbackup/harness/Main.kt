@@ -6,9 +6,11 @@ import com.kazaf.mirrorbackup.core.ManifestPartition
 import com.kazaf.mirrorbackup.core.pure.FlashMatchKind
 import com.kazaf.mirrorbackup.core.pure.FlashPartition
 import com.kazaf.mirrorbackup.core.pure.FlashPlanner
+import com.kazaf.mirrorbackup.core.pure.FlashScript
 import com.kazaf.mirrorbackup.core.pure.ImageCheck
 import com.kazaf.mirrorbackup.core.pure.ImageMeta
 import com.kazaf.mirrorbackup.core.pure.RestoreVerify
+import com.kazaf.mirrorbackup.core.pure.TwrpMode
 import java.io.ByteArrayInputStream
 import java.io.File
 import java.io.FileOutputStream
@@ -457,24 +459,44 @@ fun main(args: Array<String>) {
         !pf.blocking, "${pf.checks.count { it.ok }}/${pf.checks.size} 通过，警告 ${pf.warnings.size} 条"
     )
 
-    // 8.3 指令 + 指令自检（有没有发错指令）
-    val cmd = FlashPlanner.writeCommand(targetA) ?: ""
-    val vc = FlashPlanner.verifyWriteCommand(cmd, targetA)
-    rep.check("写指令只指向选定分区、自检通过", vc.ok, cmd)
-    rep.check("指令里设备路径唯一", Regex("/dev/block/").findAll(cmd).count() == 1)
+    // 8.3 刷入脚本（1:1 Scene flash_image）+ 脚本自检
+    val script = FlashScript.flashScript("/data/local/tmp/boot.img", targetA) ?: ""
+    val vc = FlashScript.verifyFlashScript(script, "/data/local/tmp/boot.img", targetA)
+    rep.check("刷入脚本自检通过（只指向选定分区）", vc.ok, vc.summary())
+    rep.check("脚本里设备路径唯一", Regex("/dev/block/").findAll(script).count() == 1)
+    rep.check(
+        "脚本包含 Scene 的写入要素（setrw / getsize64 / 零填充 / flash_image）",
+        script.contains("blockdev --setrw") && script.contains("blockdev --getsize64") &&
+            script.contains("cat - /dev/zero") && script.contains("flash_image")
+    )
+    rep.check("脚本支持 .gz 镜像（gzip 分支）", script.contains("gzip"))
+    rep.check("脚本保留 Scene 的返回码约定（1 过大 / 2 只读）", script.contains("return 1") && script.contains("return 2"))
     val rb = FlashPlanner.readBackCommand(targetA, bootImg.bytes) ?: ""
     rep.check(
         "回读指令精确读取镜像字节数（head -c）",
         rb.contains("head -c ${bootImg.bytes}") && rb.contains(targetA.path), rb
     )
+    // 把脚本落盘，供 WSL bash 真跑（见 restore_harness_report 的脚本测试）
+    runCatching {
+        val sh = File("build/reports/flash-script.sh")
+        sh.parentFile?.mkdirs()
+        sh.writeText(script)
+        out("    脚本已落盘: ${sh.absolutePath}")
+    }
 
-    // 8.4 模拟 dd 写入 + 回读哈希校验
-    phone.file("boot_a").writeBytes(bootBytes)
-    val readBackBytes = phone.file("boot_a").readBytes().copyOfRange(0, bootImg.bytes.toInt())
+    // 8.4 模拟「脚本语义」的写入：镜像 + 用 0 填满分区，再回读前 N 字节比对
+    val fakeDev = phone.file("boot_a")
+    fakeDev.writeBytes(ByteArray(64 * 1024))                    // 分区原有旧数据
+    fakeDev.writeBytes(bootBytes + ByteArray(64 * 1024 - bootBytes.size))  // 镜像 + 0 填充
+    val readBackBytes = fakeDev.readBytes().copyOfRange(0, bootImg.bytes.toInt())
     val wv = FlashPlanner.verifyWritten(bootImg, readBackBytes.size.toLong(), sha256(readBackBytes))
     rep.check(
-        "刷入后回读 SHA-256 与镜像一致",
+        "按脚本语义写入（镜像+零填充）后回读 SHA-256 与镜像一致",
         wv.ok, "回读=${sha256(readBackBytes).take(16)}… 镜像=${bootImg.sha256.take(16)}…"
+    )
+    rep.check(
+        "分区尾部被 0 填充（Scene 的 cat - /dev/zero 语义）",
+        fakeDev.readBytes().drop(bootBytes.size).all { it.toInt() == 0 }
     )
 
     // 8.5 单分区（非 A/B）→ 直接命中，不用问
@@ -502,21 +524,55 @@ fun main(args: Array<String>) {
     val badPath = FlashPartition("boot_a", "/dev/block/../../system/bin/x", 64 * 1024)
     val pfBadPath = FlashPlanner.preflight(bootImg, badPath)
     rep.check(
-        "路径注入（..）→ 阻断且生成不出指令",
-        pfBadPath.blocking && FlashPlanner.writeCommand(badPath) == null
+        "路径注入（..）→ 阻断且生成不出脚本",
+        pfBadPath.blocking && FlashScript.flashScript("/data/local/tmp/boot.img", badPath) == null
     )
 
-    // 8.9 指令自检能抓出「发错指令」
-    val wrongCmd = "dd of='/dev/block/by-name/boot_b' bs=1048576 conv=fsync"
-    rep.check("指令写错分区 → 自检拦下", !FlashPlanner.verifyWriteCommand(wrongCmd, targetA).ok)
-    val readLikeCmd = "dd if='/dev/block/by-name/boot_a' of='/dev/block/by-name/boot_a' bs=1048576 conv=fsync"
-    rep.check("写指令里混入 if= → 自检拦下", !FlashPlanner.verifyWriteCommand(readLikeCmd, targetA).ok)
+    // 8.9 脚本自检能抓出「发错指令」
+    val wrongTarget = phone.partitions.first { it.name == "boot_b" }
+    rep.check("脚本写错分区 → 自检拦下", !FlashScript.verifyFlashScript(script, "/data/local/tmp/boot.img", wrongTarget).ok)
+    val noPad = script.replace("cat - /dev/zero", "")
+    rep.check("脚本缺少零填充 → 自检拦下", !FlashScript.verifyFlashScript(noPad, "/data/local/tmp/boot.img", targetA).ok)
 
     // 8.10 回读不一致能抓到（模拟刷完分区内容被改写）
     val corrupt = bootBytes.copyOf().also { it[123] = (it[123].toInt() xor 0xFF).toByte() }
     rep.check(
         "分区内容与镜像不一致 → 回读校验失败",
         !FlashPlanner.verifyWritten(bootImg, corrupt.size.toLong(), sha256(corrupt)).ok
+    )
+
+    // 8.11 分区目录优先级（Scene bootdevice.sh：最后一个存在的生效）
+    rep.check(
+        "by-name 目录优先级与 Scene 一致（platform/bootdevice 覆盖 by-name）",
+        FlashScript.resolveDeviceRoot(
+            listOf("/dev/block/by-name", "/dev/block/platform/bootdevice/by-name")
+        ) == "/dev/block/platform/bootdevice/by-name"
+    )
+    rep.check(
+        "只有一个目录存在时用它",
+        FlashScript.resolveDeviceRoot(listOf("/dev/block/by-name")) == "/dev/block/by-name"
+    )
+
+    // 8.12 分区镜像导出脚本（Scene：dd if='分区' of='/sdcard/<名>.img'）
+    val export = FlashScript.exportScript(targetA, "/sdcard/boot_a.img") ?: ""
+    rep.check(
+        "导出脚本与 Scene 一致：dd if=分区 of=/sdcard/<分区名>.img",
+        export.contains("dd if='/dev/block/by-name/boot_a'") && export.contains("of='/sdcard/boot_a.img'"),
+        export.lineSequence().firstOrNull { it.contains("dd ") } ?: ""
+    )
+
+    // 8.13 TWRP 注入模式判定（Scene twrp_mode.sh）
+    val modeBoot = FlashScript.twrpMode(setOf("boot_a", "boot_b", "vbmeta", "misc"))
+    val modeRec = FlashScript.twrpMode(setOf("recovery_a", "recovery_b", "boot"))
+    val modeVend = FlashScript.twrpMode(setOf("vendor_boot", "boot_a", "boot_b"))
+    rep.check("boot_a+boot_b → BOOT_AB（替换 ramdisk）", modeBoot == TwrpMode.BOOT_AB, "$modeBoot")
+    rep.check("存在 recovery_a → RECOVERY_AB（直接刷 recovery）", modeRec == TwrpMode.RECOVERY_AB, "$modeRec")
+    rep.check("存在 vendor_boot → UNSUPPORTED（与 Scene 相同）", modeVend == TwrpMode.UNSUPPORTED, "$modeVend")
+    val twrpScript = FlashScript.twrpScript("/data/local/tmp/twrp.img", "/dev/block/by-name", TwrpMode.BOOT_AB, "/data/local/tmp/twrp-work") ?: ""
+    rep.check(
+        "TWRP 脚本包含 magiskboot unpack/repack + flash_image 两个槽位",
+        twrpScript.contains("unpack") && twrpScript.contains("repack") &&
+            twrpScript.contains("patch_boot boot_a") && twrpScript.contains("patch_boot boot_b")
     )
 
     // ── 汇总 ──

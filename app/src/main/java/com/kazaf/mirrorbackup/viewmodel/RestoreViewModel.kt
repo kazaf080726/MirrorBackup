@@ -23,6 +23,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
 
 /**
  * 注意：所有 mutableStateOf 的写入必须发生在主线程（或状态已在主线程初始化之后）。
@@ -260,7 +261,7 @@ class RestoreViewModel(app: Application) : AndroidViewModel(app) {
                 flashResult = if (verdict.ok) {
                     "✔ 刷入完成，回读 SHA-256 与镜像一致"
                 } else {
-                    "❌ 刷入校验未通过：${verdict.summary()}"
+                    "❌ 刷入失败：${verdict.summary()}"
                 }
             } finally {
                 withContext(Dispatchers.IO) { flasher.finish() }
@@ -268,5 +269,102 @@ class RestoreViewModel(app: Application) : AndroidViewModel(app) {
                 flashProgress.value = 0L to 0L
             }
         }
+    }
+
+    // ── 分区镜像导出（Scene：dd if=分区 of=/sdcard/<名>.img）──────────
+    var exportBusy by mutableStateOf(false)
+        private set
+    var exportResult by mutableStateOf<String?>(null)
+        private set
+
+    fun exportTarget() {
+        val target = flashTarget ?: return
+        if (exportBusy || flashBusy) return
+        exportBusy = true
+        exportResult = null
+        viewModelScope.launch {
+            try {
+                val r = withContext(Dispatchers.IO) { flasher.exportPartition(target) }
+                exportResult = if (r.ok) "✔ 已导出到 /sdcard/${target.name}.img" else "❌ 导出失败：${r.summary()}"
+            } finally {
+                exportBusy = false
+            }
+        }
+    }
+
+    // ── TWRP 注入（Scene：twrp_mode.sh + twrp_install.sh）─────────────
+    var twrpFile by mutableStateOf<File?>(null)
+        private set
+    var twrpModeText by mutableStateOf("")
+        private set
+    var twrpBusy by mutableStateOf(false)
+        private set
+    var twrpResult by mutableStateOf<String?>(null)
+        private set
+    var twrpResultOk by mutableStateOf(false)
+        private set
+
+    /** 进入恢复页时探测一次设备是否支持 TWRP 注入 */
+    fun detectTwrpSupport() {
+        if (twrpBusy) return
+        viewModelScope.launch {
+            val mode = withContext(Dispatchers.IO) { flasher.twrpMode() }
+            twrpModeText = when (mode) {
+                com.kazaf.mirrorbackup.core.pure.TwrpMode.BOOT_AB -> "支持：A/B（替换 boot 的 ramdisk）"
+                com.kazaf.mirrorbackup.core.pure.TwrpMode.RECOVERY_AB -> "支持：A/B（直接刷入 recovery_a / recovery_b）"
+                else -> "不支持：非 A/B，或存在 vendor_boot"
+            }
+        }
+    }
+
+    fun pickTwrp(uri: Uri) {
+        if (twrpBusy) return
+        twrpBusy = true
+        twrpResult = null
+        viewModelScope.launch {
+            try {
+                val f = withContext(Dispatchers.IO) {
+                    val dir = java.io.File(getApplication<Application>().cacheDir, "twrp").apply { mkdirs() }
+                    val name = queryDisplayName(uri) ?: "twrp.img"
+                    val target = java.io.File(dir, name.replace(Regex("[^A-Za-z0-9._-]"), "_"))
+                    getApplication<Application>().contentResolver.openInputStream(uri)?.use { input ->
+                        target.outputStream().use { out -> input.copyTo(out, 4 * 1024 * 1024) }
+                    }
+                    target.takeIf { it.length() > 0 }
+                }
+                twrpFile = f
+                if (f != null) log.info("已选择 TWRP 镜像：${f.name}（${fmtSize(f.length())}）")
+                detectTwrpSupport()
+            } finally {
+                twrpBusy = false
+            }
+        }
+    }
+
+    fun injectTwrp() {
+        val f = twrpFile ?: return
+        if (twrpBusy) return
+        twrpBusy = true
+        twrpResult = null
+        twrpResultOk = false
+        viewModelScope.launch {
+            try {
+                val r = withContext(Dispatchers.IO) { flasher.injectTwrp(f) }
+                twrpResultOk = r.ok
+                twrpResult = if (r.ok) "✔ TWRP 注入完成" else "❌ 注入失败：${r.summary()}"
+            } finally {
+                withContext(Dispatchers.IO) { flasher.finish() }
+                twrpBusy = false
+            }
+        }
+    }
+
+    private fun queryDisplayName(uri: Uri): String? = try {
+        getApplication<Application>().contentResolver.query(uri, null, null, null, null)?.use { c ->
+            val idx = c.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+            if (idx >= 0 && c.moveToFirst()) c.getString(idx) else null
+        }
+    } catch (e: Exception) {
+        null
     }
 }

@@ -133,37 +133,10 @@ object FlashPlanner {
         return Preflight(checks)
     }
 
-    /** 写入指令（镜像从 stdin 进，of= 是目标分区） */
-    fun writeCommand(target: FlashPartition): String? =
-        if (!safeDevicePath(target.path)) null
-        else "dd of='${target.path}' bs=1048576 conv=fsync"
-
     /** 回读指令：精确读取前 bytes 字节并算 SHA-256（head -c 不会因非 1MB 对齐而多读） */
     fun readBackCommand(target: FlashPartition, bytes: Long): String? =
         if (!safeDevicePath(target.path) || bytes <= 0) null
         else "head -c $bytes '${target.path}' 2>/dev/null | sha256sum"
-
-    /**
-     * 「最后校验一下有没有发错指令」：执行前对拼好的指令做静态自检。
-     *  - 只允许出现一个设备路径，且必须等于选定的分区路径
-     *  - 必须是 of= 写指令，不能混入 if=（避免把读指令当写指令）
-     *  - 必须带 conv=fsync
-     *  - 指令里必须出现选定分区名
-     */
-    fun verifyWriteCommand(cmd: String, target: FlashPartition): CommandCheck {
-        val reasons = mutableListOf<String>()
-        val paths = Regex("/dev/block/[A-Za-z0-9_./-]+").findAll(cmd).map { it.value }.toList()
-        when {
-            paths.isEmpty() -> reasons += "指令里没有设备路径"
-            paths.size > 1 -> reasons += "指令里出现多个设备路径：${paths.joinToString()}"
-            paths[0] != target.path -> reasons += "指令目标 ${paths[0]} 与选定分区 ${target.path} 不一致"
-        }
-        if (!Regex("(^|\\s)of=").containsMatchIn(cmd)) reasons += "指令缺少 of= 写入目标"
-        if (Regex("(^|\\s)if=").containsMatchIn(cmd)) reasons += "写指令里出现了 if=（读指令特征）"
-        if (!cmd.contains("conv=fsync")) reasons += "缺少 conv=fsync，写入可能未落盘"
-        if (!cmd.contains(target.name)) reasons += "指令里找不到分区名 ${target.name}"
-        return CommandCheck(reasons.isEmpty(), reasons)
-    }
 
     /** 写入后哈希校验：回读的 SHA-256 与镜像一致、字节数一致 */
     fun verifyWritten(image: ImageMeta, readBackBytes: Long, readBackSha256: String): CommandCheck {

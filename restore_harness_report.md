@@ -1,13 +1,13 @@
 # 恢复工作台 · 电脑模拟测试报告
 
 > 假手机环境（假设备/假分区/假 ZIP），跑的是 APP 里同一份校验与写入代码。
-> 生成时间: 2026-10-18T01:23:25.300142500
-> 结果: **通过 42 / 失败 0**
+> 生成时间: 2026-10-18T01:43:04.541227600
+> 结果: **通过 53 / 失败 0**
 
 ```
 ==============================================================
  恢复工作台 · 电脑模拟测试（假手机环境，不接触真机）
- 工作目录: C:\Users\ADMINI~1\AppData\Local\Temp\mirror_restore_harness_1792257804960
+ 工作目录: C:\Users\ADMINI~1\AppData\Local\Temp\mirror_restore_harness_1792258984172
 ==============================================================
 
 [假手机] PLC110 / Android 16 / SN=SIM-SN-0001 / 指纹=cd1c5bb75769057f…
@@ -62,22 +62,34 @@
   假分区: boot_a(65536) boot_b(65536) vbmeta(4096) misc(4096)
   ✅ boot.img + boot_a/boot_b → 需要用户选 A/B 槽位 — 检测到 A/B 双分区，请选择槽位
   ✅ 选 boot_a → 前置校验不阻断（风险提示仅警告） — 9/10 通过，警告 1 条
-  ✅ 写指令只指向选定分区、自检通过 — dd of='/dev/block/by-name/boot_a' bs=1048576 conv=fsync
-  ✅ 指令里设备路径唯一 
+  ✅ 刷入脚本自检通过（只指向选定分区） — 通过
+  ✅ 脚本里设备路径唯一 
+  ✅ 脚本包含 Scene 的写入要素（setrw / getsize64 / 零填充 / flash_image） 
+  ✅ 脚本支持 .gz 镜像（gzip 分支） 
+  ✅ 脚本保留 Scene 的返回码约定（1 过大 / 2 只读） 
   ✅ 回读指令精确读取镜像字节数（head -c） — head -c 65536 '/dev/block/by-name/boot_a' 2>/dev/null | sha256sum
-  ✅ 刷入后回读 SHA-256 与镜像一致 — 回读=66319c850c659351… 镜像=66319c850c659351…
+    脚本已落盘: D:\Users\Administrator\Documents\DeepSeek Workspace\MirrorBackup\restore-harness\build\reports\flash-script.sh
+  ✅ 按脚本语义写入（镜像+零填充）后回读 SHA-256 与镜像一致 — 回读=66319c850c659351… 镜像=66319c850c659351…
+  ✅ 分区尾部被 0 填充（Scene 的 cat - /dev/zero 语义） 
   ✅ misc.img → 单分区直接命中，不用选槽 — 文件名与分区名一致：misc
   ✅ boot_a.img + 单分区机型 → 自动对应 boot — 已按单分区 boot 处理
   ✅ vendor.img 无匹配 → 标记为需手动选择 — 未找到与「vendor」匹配的分区
   ✅ 镜像比分区大 → 阻断 — 镜像不超过分区大小
   ✅ 分区在用户黑名单 → 阻断 
   ✅ 目标节点不存在 → 阻断 
-  ✅ 路径注入（..）→ 阻断且生成不出指令 
-  ✅ 指令写错分区 → 自检拦下 
-  ✅ 写指令里混入 if= → 自检拦下 
+  ✅ 路径注入（..）→ 阻断且生成不出脚本 
+  ✅ 脚本写错分区 → 自检拦下 
+  ✅ 脚本缺少零填充 → 自检拦下 
   ✅ 分区内容与镜像不一致 → 回读校验失败 
+  ✅ by-name 目录优先级与 Scene 一致（platform/bootdevice 覆盖 by-name） 
+  ✅ 只有一个目录存在时用它 
+  ✅ 导出脚本与 Scene 一致：dd if=分区 of=/sdcard/<分区名>.img — dd if='/dev/block/by-name/boot_a' of='/sdcard/boot_a.img'
+  ✅ boot_a+boot_b → BOOT_AB（替换 ramdisk） — BOOT_AB
+  ✅ 存在 recovery_a → RECOVERY_AB（直接刷 recovery） — RECOVERY_AB
+  ✅ 存在 vendor_boot → UNSUPPORTED（与 Scene 相同） — UNSUPPORTED
+  ✅ TWRP 脚本包含 magiskboot unpack/repack + flash_image 两个槽位 
 
 ==============================================================
- 结果: 通过 42 / 失败 0
+ 结果: 通过 53 / 失败 0
 ==============================================================
 ```
