@@ -28,6 +28,7 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
@@ -70,7 +71,7 @@ fun KsuStatusCard(
         animationSpec = spring(dampingRatio = 0.3f, stiffness = 620f),
         label = "ksu_card_tilt"
     )
-    val shape = RoundedCornerShape(24.dp)
+    val shape = RoundedCornerShape(26.dp)
 
     Box(
         modifier
@@ -149,7 +150,7 @@ fun KsuStatusRing(
         drawCircle(
             color = color,
             radius = r,
-            style = Stroke(width = stroke, cap = StrokeCap.Round)
+            style = Stroke(width = stroke, cap = StrokeCap.Round, join = StrokeJoin.Round)
         )
         if (ok) {
             // 对勾
@@ -159,7 +160,7 @@ fun KsuStatusRing(
                 lineTo(s * 0.44f, s * 0.66f)
                 lineTo(s * 0.72f, s * 0.36f)
             }
-            drawPath(path, color = color, style = Stroke(width = stroke, cap = StrokeCap.Round))
+            drawPath(path, color = color, style = Stroke(width = stroke, cap = StrokeCap.Round, join = StrokeJoin.Round))
         } else {
             // 交叉
             val s = this.size.minDimension

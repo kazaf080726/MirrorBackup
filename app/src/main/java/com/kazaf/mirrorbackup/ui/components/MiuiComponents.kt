@@ -348,8 +348,8 @@ fun TerminalLog(
     Surface(
         modifier = modifier
             .height(height)
-            .shadow(14.dp, RoundedCornerShape(18.dp), spotColor = Color.Black.copy(alpha = if (dark) 0.5f else 0.15f)),
-        shape = RoundedCornerShape(18.dp),
+            .shadow(14.dp, RoundedCornerShape(LocalGlassCorner.current), spotColor = Color.Black.copy(alpha = if (dark) 0.5f else 0.15f)),
+        shape = RoundedCornerShape(LocalGlassCorner.current),
         color = MiuiColors.TerminalBg,
         border = BorderStroke(1.dp, Color.White.copy(alpha = 0.1f))
     ) {
