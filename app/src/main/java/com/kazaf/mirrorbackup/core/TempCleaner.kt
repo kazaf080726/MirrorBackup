@@ -52,6 +52,7 @@ object TempCleaner {
                 }
             }
             (File(cache, "unpack").listFiles() ?: emptyArray()).forEach { purge(it, stats) }
+            (File(cache, "flash").listFiles() ?: emptyArray()).forEach { purge(it, stats) }
             purge(File(cache, "selftest"), stats)
             purge(File(cache, "payload_dumper.apk"), stats)
         } catch (_: Exception) {

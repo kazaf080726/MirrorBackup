@@ -8,11 +8,19 @@ import androidx.compose.runtime.setValue
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.kazaf.mirrorbackup.core.BackupRecord
+import com.kazaf.mirrorbackup.core.ImageFlasher
 import com.kazaf.mirrorbackup.core.LogBuffer
 import com.kazaf.mirrorbackup.core.RecordsStore
 import com.kazaf.mirrorbackup.core.RestoreEngine
 import com.kazaf.mirrorbackup.core.SuManager
+import com.kazaf.mirrorbackup.core.fmtSize
+import com.kazaf.mirrorbackup.core.pure.FlashCheck
+import com.kazaf.mirrorbackup.core.pure.FlashMatch
+import com.kazaf.mirrorbackup.core.pure.FlashMatchKind
+import com.kazaf.mirrorbackup.core.pure.FlashPartition
+import com.kazaf.mirrorbackup.core.pure.FlashPlanner
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -59,7 +67,7 @@ class RestoreViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun import(uri: Uri) {
-        if (busy) return
+        if (busy || flashBusy) return
         currentUri = uri
         busy = true
         loadError = null
@@ -101,7 +109,7 @@ class RestoreViewModel(app: Application) : AndroidViewModel(app) {
     fun restore() {
         val uri = currentUri ?: return
         val cur = loaded ?: return
-        if (busy) return
+        if (busy || flashBusy) return
         busy = true
         viewModelScope.launch(Dispatchers.IO) {
             try {
@@ -115,5 +123,150 @@ class RestoreViewModel(app: Application) : AndroidViewModel(app) {
 
     fun stop() {
         engine.cancelled = true
+    }
+
+    // ── 单分区刷入（.img） ────────────────────────────────
+    private val flasher = ImageFlasher(app, su, log)
+
+    var flashImage by mutableStateOf<ImageFlasher.PreparedImage?>(null)
+        private set
+    var flashTarget by mutableStateOf<FlashPartition?>(null)
+        private set
+    var flashMatch by mutableStateOf<FlashMatch?>(null)
+        private set
+    var flashCandidates by mutableStateOf<List<FlashPartition>>(emptyList())
+        private set
+    var flashPartitions by mutableStateOf<List<FlashPartition>>(emptyList())
+        private set
+    var flashChecks by mutableStateOf<List<FlashCheck>>(emptyList())
+        private set
+    var flashBusy by mutableStateOf(false)
+        private set
+    var flashConfirm by mutableStateOf(false)
+        private set
+    var flashManualPicker by mutableStateOf(false)
+        private set
+    var flashResult by mutableStateOf<String?>(null)
+        private set
+    var flashResultOk by mutableStateOf(false)
+        private set
+
+    /** 写入进度（字节 done / total），StateFlow 保证跨线程安全 */
+    val flashProgress = MutableStateFlow(0L to 0L)
+    /** 前置校验提示（非阻断风险） */
+    var flashRiskNote by mutableStateOf("")
+        private set
+
+    val flashCanStart: Boolean
+        get() = flashImage != null && flashTarget != null && !flashBusy && !busy &&
+            flashChecks.isNotEmpty() && flashChecks.none { !it.ok && it.fatal }
+
+    fun pickImage(uri: Uri) {
+        if (flashBusy || busy) return
+        flashBusy = true
+        flashResult = null
+        flashResultOk = false
+        flashImage = null
+        flashTarget = null
+        flashMatch = null
+        flashChecks = emptyList()
+        flashRiskNote = ""
+        flashProgress.value = 0L to 0L
+        viewModelScope.launch {
+            try {
+                val prepared = withContext(Dispatchers.IO) {
+                    flasher.prepare(uri) { step -> log.progress("flash_prep", "   $step") }
+                }
+                if (prepared == null) {
+                    flashResult = "读取镜像失败"
+                    return@launch
+                }
+                val parts = withContext(Dispatchers.IO) { flasher.scan() }
+                val m = FlashPlanner.match(prepared.meta, parts)
+                flashImage = prepared
+                flashPartitions = parts
+                flashMatch = m
+                flashCandidates = m.candidates
+                log.info("🔎 分区扫描：${parts.size} 个 · ${m.note}")
+                when (m.kind) {
+                    FlashMatchKind.SINGLE -> m.single?.let { applyTarget(prepared, it) }
+                    FlashMatchKind.NEED_SLOT -> log.warn(
+                        "⚠ A/B 双分区：请选择槽位（${m.candidates.joinToString(" / ") { "${it.name} ${fmtSize(it.sizeBytes)}" }}）"
+                    )
+                    FlashMatchKind.NONE -> log.warn("⚠ ${m.note}，可从分区列表手动选择")
+                }
+            } finally {
+                flashBusy = false
+            }
+        }
+    }
+
+    /** 用户点选槽位 / 手动选择分区 */
+    fun chooseTarget(p: FlashPartition) {
+        val img = flashImage ?: return
+        viewModelScope.launch { applyTarget(img, p) }
+    }
+
+    private suspend fun applyTarget(img: ImageFlasher.PreparedImage, p: FlashPartition) {
+        flashTarget = p
+        val pf = withContext(Dispatchers.IO) { flasher.preflight(img, p) }
+        flashChecks = pf.checks
+        flashRiskNote = pf.warnings.joinToString("；") { it.detail.ifEmpty { it.label } }
+        val passed = pf.checks.count { it.ok }
+        log.info("🧪 前置校验 ${passed}/${pf.checks.size} 项通过（目标 ${p.name} → ${p.path}）")
+        pf.checks.filter { !it.ok }.forEach {
+            if (it.fatal) log.error("   ❌ ${it.label}${if (it.detail.isEmpty()) "" else "（${it.detail}）"}")
+            else log.warn("   ⚠ ${it.label}${if (it.detail.isEmpty()) "" else "（${it.detail}）"}")
+        }
+        logOk(pf.blocking)
+    }
+
+    private fun logOk(blocking: Boolean) {
+        if (blocking) log.error("❌ 前置校验未通过，禁止刷入")
+        else log.ok("✔ 前置校验通过，可以刷入（还会让你再确认一次）")
+    }
+
+    fun openManualPicker() {
+        if (flashPartitions.isNotEmpty()) flashManualPicker = true
+    }
+
+    fun closeManualPicker() {
+        flashManualPicker = false
+    }
+
+    fun askFlash() {
+        if (flashCanStart) flashConfirm = true
+    }
+
+    fun cancelFlash() {
+        flashConfirm = false
+    }
+
+    fun doFlash() {
+        val img = flashImage ?: return
+        val target = flashTarget ?: return
+        if (flashBusy || !flashCanStart) return
+        flashConfirm = false
+        flashBusy = true
+        flashResult = null
+        flashResultOk = false
+        flashProgress.value = 0L to img.meta.bytes
+        viewModelScope.launch {
+            try {
+                val verdict = withContext(Dispatchers.IO) {
+                    flasher.flash(img, target) { done, total -> flashProgress.value = done to total }
+                }
+                flashResultOk = verdict.ok
+                flashResult = if (verdict.ok) {
+                    "✔ 刷入完成，回读 SHA-256 与镜像一致"
+                } else {
+                    "❌ 刷入校验未通过：${verdict.summary()}"
+                }
+            } finally {
+                withContext(Dispatchers.IO) { flasher.finish() }
+                flashBusy = false
+                flashProgress.value = 0L to 0L
+            }
+        }
     }
 }

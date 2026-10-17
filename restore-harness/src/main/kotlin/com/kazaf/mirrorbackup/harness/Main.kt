@@ -3,7 +3,11 @@ package com.kazaf.mirrorbackup.harness
 import com.kazaf.mirrorbackup.core.BackupManifest
 import com.kazaf.mirrorbackup.core.LibSparse
 import com.kazaf.mirrorbackup.core.ManifestPartition
+import com.kazaf.mirrorbackup.core.pure.FlashMatchKind
+import com.kazaf.mirrorbackup.core.pure.FlashPartition
+import com.kazaf.mirrorbackup.core.pure.FlashPlanner
 import com.kazaf.mirrorbackup.core.pure.ImageCheck
+import com.kazaf.mirrorbackup.core.pure.ImageMeta
 import com.kazaf.mirrorbackup.core.pure.RestoreVerify
 import java.io.ByteArrayInputStream
 import java.io.File
@@ -413,6 +417,107 @@ fun main(args: Array<String>) {
     val badChecks = verifyZip(tamperedZip, manifest)
     val wouldBlock = badChecks.any { it.shaOk != true }
     rep.check("存在校验失败镜像 → 恢复前即阻断写入", wouldBlock)
+
+    // ── 8. 单分区刷入（.img）：假 /dev/block/by-name 环境 ──
+    out("\n── 8. 单分区刷入（假 /dev/block/by-name 环境）──")
+
+    /** 假手机：分区路径是真实的 /dev/block/by-name/xxx，字节落在本地文件（不碰任何真设备） */
+    class FakePhone(val root: File) {
+        val partitions = mutableListOf<FlashPartition>()
+        fun add(name: String, size: Int) {
+            File(root, "$name.img").writeBytes(ByteArray(size))
+            partitions += FlashPartition(name, "/dev/block/by-name/$name", size.toLong())
+        }
+        fun file(name: String) = File(root, "$name.img")
+    }
+
+    val phone = FakePhone(File(work, "fake_by_name").apply { mkdirs() })
+    phone.add("boot_a", 64 * 1024)
+    phone.add("boot_b", 64 * 1024)
+    phone.add("vbmeta", 4096)
+    phone.add("misc", 4096)
+    out("  假分区: " + phone.partitions.joinToString(" ") { "${it.name}(${it.sizeBytes})" })
+
+    val bootBytes = ByteArray(64 * 1024).also { Random(7).nextBytes(it) }
+    val bootImg = ImageMeta("boot.img", bootBytes.size.toLong(), sha256(bootBytes))
+
+    // 8.1 A/B 双分区 → 必须问用户选槽位
+    val m1 = FlashPlanner.match(bootImg, phone.partitions)
+    rep.check(
+        "boot.img + boot_a/boot_b → 需要用户选 A/B 槽位",
+        m1.kind == FlashMatchKind.NEED_SLOT && m1.candidates.size == 2,
+        m1.note
+    )
+
+    // 8.2 选 A 槽 → 前置校验
+    val targetA = m1.candidates.first { it.name == "boot_a" }
+    val pf = FlashPlanner.preflight(bootImg, targetA, nodeExists = true, nodeWritable = true, risky = true)
+    rep.check(
+        "选 boot_a → 前置校验不阻断（风险提示仅警告）",
+        !pf.blocking, "${pf.checks.count { it.ok }}/${pf.checks.size} 通过，警告 ${pf.warnings.size} 条"
+    )
+
+    // 8.3 指令 + 指令自检（有没有发错指令）
+    val cmd = FlashPlanner.writeCommand(targetA) ?: ""
+    val vc = FlashPlanner.verifyWriteCommand(cmd, targetA)
+    rep.check("写指令只指向选定分区、自检通过", vc.ok, cmd)
+    rep.check("指令里设备路径唯一", Regex("/dev/block/").findAll(cmd).count() == 1)
+    val rb = FlashPlanner.readBackCommand(targetA, bootImg.bytes) ?: ""
+    rep.check(
+        "回读指令精确读取镜像字节数（head -c）",
+        rb.contains("head -c ${bootImg.bytes}") && rb.contains(targetA.path), rb
+    )
+
+    // 8.4 模拟 dd 写入 + 回读哈希校验
+    phone.file("boot_a").writeBytes(bootBytes)
+    val readBackBytes = phone.file("boot_a").readBytes().copyOfRange(0, bootImg.bytes.toInt())
+    val wv = FlashPlanner.verifyWritten(bootImg, readBackBytes.size.toLong(), sha256(readBackBytes))
+    rep.check(
+        "刷入后回读 SHA-256 与镜像一致",
+        wv.ok, "回读=${sha256(readBackBytes).take(16)}… 镜像=${bootImg.sha256.take(16)}…"
+    )
+
+    // 8.5 单分区（非 A/B）→ 直接命中，不用问
+    val miscImg = ImageMeta("misc.img", 4096, sha256(ByteArray(4096)))
+    val m2 = FlashPlanner.match(miscImg, phone.partitions)
+    rep.check("misc.img → 单分区直接命中，不用选槽", m2.kind == FlashMatchKind.SINGLE && m2.single?.name == "misc", m2.note)
+
+    // 8.6 boot_a.img 但机型只有 boot（单分区机型）
+    val singlePhone = FakePhone(File(work, "fake_single").apply { mkdirs() })
+    singlePhone.add("boot", 64 * 1024)
+    val m3 = FlashPlanner.match(ImageMeta("boot_a.img", 64 * 1024, "x".repeat(64)), singlePhone.partitions)
+    rep.check("boot_a.img + 单分区机型 → 自动对应 boot", m3.kind == FlashMatchKind.SINGLE && m3.single?.name == "boot", m3.note)
+
+    // 8.7 找不到匹配 → 交给用户手动选
+    val m4 = FlashPlanner.match(ImageMeta("vendor.img", 100, "x".repeat(64)), singlePhone.partitions)
+    rep.check("vendor.img 无匹配 → 标记为需手动选择", m4.kind == FlashMatchKind.NONE, m4.note)
+
+    // 8.8 前置校验能拦住危险操作
+    val pfBig = FlashPlanner.preflight(ImageMeta("boot.img", 128L * 1024, "a".repeat(64)), targetA)
+    rep.check("镜像比分区大 → 阻断", pfBig.blocking, pfBig.checks.filter { !it.ok }.joinToString { it.label })
+    val pfBlack = FlashPlanner.preflight(bootImg, targetA, blacklist = setOf("boot_a"))
+    rep.check("分区在用户黑名单 → 阻断", pfBlack.blocking)
+    val pfNoNode = FlashPlanner.preflight(bootImg, targetA, nodeExists = false)
+    rep.check("目标节点不存在 → 阻断", pfNoNode.blocking)
+    val badPath = FlashPartition("boot_a", "/dev/block/../../system/bin/x", 64 * 1024)
+    val pfBadPath = FlashPlanner.preflight(bootImg, badPath)
+    rep.check(
+        "路径注入（..）→ 阻断且生成不出指令",
+        pfBadPath.blocking && FlashPlanner.writeCommand(badPath) == null
+    )
+
+    // 8.9 指令自检能抓出「发错指令」
+    val wrongCmd = "dd of='/dev/block/by-name/boot_b' bs=1048576 conv=fsync"
+    rep.check("指令写错分区 → 自检拦下", !FlashPlanner.verifyWriteCommand(wrongCmd, targetA).ok)
+    val readLikeCmd = "dd if='/dev/block/by-name/boot_a' of='/dev/block/by-name/boot_a' bs=1048576 conv=fsync"
+    rep.check("写指令里混入 if= → 自检拦下", !FlashPlanner.verifyWriteCommand(readLikeCmd, targetA).ok)
+
+    // 8.10 回读不一致能抓到（模拟刷完分区内容被改写）
+    val corrupt = bootBytes.copyOf().also { it[123] = (it[123].toInt() xor 0xFF).toByte() }
+    rep.check(
+        "分区内容与镜像不一致 → 回读校验失败",
+        !FlashPlanner.verifyWritten(bootImg, corrupt.size.toLong(), sha256(corrupt)).ok
+    )
 
     // ── 汇总 ──
     out("\n==============================================================")

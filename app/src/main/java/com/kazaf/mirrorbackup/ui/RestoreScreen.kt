@@ -14,13 +14,17 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -43,8 +47,11 @@ import com.kazaf.mirrorbackup.core.DISCLAIMER_TEXT
 import com.kazaf.mirrorbackup.core.RestoreEngine
 import com.kazaf.mirrorbackup.core.fmtSize
 import com.kazaf.mirrorbackup.core.modeLabelOf
+import com.kazaf.mirrorbackup.core.pure.FlashMatchKind
+import com.kazaf.mirrorbackup.core.pure.FlashPartition
 import com.kazaf.mirrorbackup.ui.components.CircularProgressRing
 import com.kazaf.mirrorbackup.ui.components.FloatingDock
+import com.kazaf.mirrorbackup.ui.components.FormatChip
 import com.kazaf.mirrorbackup.ui.components.LiquidGlassCard
 import com.kazaf.mirrorbackup.ui.components.MiuiButton
 import com.kazaf.mirrorbackup.ui.components.RecordsCard
@@ -75,6 +82,19 @@ fun RestoreScreen(vm: RestoreViewModel) {
         }
     }
 
+    // 单分区刷入：选 .img
+    val imgLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            try {
+                context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            } catch (_: Exception) {
+            }
+            vm.pickImage(uri)
+        }
+    }
+
     // 恢复中止警报弹窗
     var alertDismissed by remember { mutableStateOf(false) }
     LaunchedEffect(progress.phase) {
@@ -101,6 +121,10 @@ fun RestoreScreen(vm: RestoreViewModel) {
                 .padding(horizontal = 16.dp)
         ) {
             Spacer(Modifier.height(4.dp))
+
+            // ── 单分区刷入（.img）──
+            FlashCard(vm, onPick = { imgLauncher.launch(arrayOf("*/*")) })
+            Spacer(Modifier.height(12.dp))
 
             vm.loadError?.let { err ->
                 LiquidGlassCard {
@@ -354,3 +378,204 @@ private fun PartitionRow(p: RestoreEngine.PartitionPreview) {
         Text(text, color = color, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
     }
 }
+
+/* ────────── 单分区刷入（.img）────────── */
+
+@Composable
+private fun FlashCard(vm: RestoreViewModel, onPick: () -> Unit) {
+    val cs = MaterialTheme.colorScheme
+    val img = vm.flashImage
+    val match = vm.flashMatch
+    val target = vm.flashTarget
+    val prog by vm.flashProgress.collectAsState()
+
+    LiquidGlassCard(Modifier.fillMaxWidth()) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("单分区刷入（.img）", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.weight(1f))
+            if (vm.flashBusy) {
+                CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+            }
+        }
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "选一个 .img → 自动匹配 /dev/block/by-name 里的同名分区；A/B 双分区会让你选 A 还是 B。",
+            fontSize = 11.sp,
+            color = cs.onSurfaceVariant
+        )
+        Spacer(Modifier.height(8.dp))
+        MiuiButton(
+            text = if (img == null) "选择 .img 文件" else "重新选择 .img",
+            onClick = onPick,
+            enabled = !vm.flashBusy,
+            modifier = Modifier.fillMaxWidth()
+        )
+
+        img?.let { prepared ->
+            Spacer(Modifier.height(8.dp))
+            Text("${prepared.meta.fileName}  ${fmtSize(prepared.meta.bytes)}", fontSize = 13.sp, fontWeight = FontWeight.Medium)
+            Text(
+                "SHA-256 ${prepared.meta.sha256.take(32)}…" + if (prepared.meta.sparse) "  （稀疏镜像已展开）" else "",
+                fontSize = 10.sp,
+                color = cs.onSurfaceVariant
+            )
+        }
+
+        match?.let { m ->
+            Spacer(Modifier.height(8.dp))
+            when (m.kind) {
+                FlashMatchKind.SINGLE -> {
+                    val t = target ?: m.single
+                    if (t != null) {
+                        Text("🎯 目标分区", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                        Text("${t.name}  →  ${t.path}", fontSize = 12.sp)
+                        Text("分区容量 ${fmtSize(t.sizeBytes)}", fontSize = 11.sp, color = cs.onSurfaceVariant)
+                    }
+                }
+                FlashMatchKind.NEED_SLOT -> {
+                    Text("🎯 A/B 双分区，请选择要刷入的槽位", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                    Spacer(Modifier.height(6.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        m.candidates.forEach { p ->
+                            FormatChip(
+                                title = if (p.name.endsWith("_b")) "B 槽" else "A 槽",
+                                desc = "${p.name} · ${fmtSize(p.sizeBytes)}",
+                                selected = target?.name == p.name,
+                                onClick = { vm.chooseTarget(p) },
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                    }
+                }
+                FlashMatchKind.NONE -> {
+                    Text("⚠ ${m.note}", fontSize = 12.sp, color = cs.error)
+                    Spacer(Modifier.height(6.dp))
+                    MiuiButton(
+                        text = "从分区列表手动选择（${vm.flashPartitions.size} 个）",
+                        onClick = { vm.openManualPicker() },
+                        enabled = !vm.flashBusy,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            }
+        }
+
+        if (vm.flashChecks.isNotEmpty()) {
+            Spacer(Modifier.height(8.dp))
+            val okCount = vm.flashChecks.count { it.ok }
+            Text(
+                "🧪 前置校验 ${okCount}/${vm.flashChecks.size}",
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = if (vm.flashChecks.any { !it.ok && it.fatal }) MiuiColors.Red else MiuiColors.Green
+            )
+            vm.flashChecks.forEach { c ->
+                Text(
+                    "${if (c.ok) "✅" else if (c.fatal) "❌" else "⚠"} ${c.label}" +
+                        (if (c.detail.isEmpty()) "" else "（${c.detail}）"),
+                    fontSize = 11.sp,
+                    color = when {
+                        c.ok -> cs.onSurfaceVariant
+                        c.fatal -> MiuiColors.Red
+                        else -> cs.onSurface
+                    }
+                )
+            }
+        }
+
+        if (vm.flashBusy && prog.second > 0) {
+            Spacer(Modifier.height(8.dp))
+            LinearProgressIndicator(
+                progress = { (prog.first.toFloat() / prog.second).coerceIn(0f, 1f) },
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(Modifier.height(4.dp))
+            Text("正在写入 ${fmtSize(prog.first)} / ${fmtSize(prog.second)}", fontSize = 11.sp, color = cs.onSurfaceVariant)
+        }
+
+        vm.flashResult?.let { r ->
+            Spacer(Modifier.height(8.dp))
+            Text(r, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = if (vm.flashResultOk) MiuiColors.Green else MiuiColors.Red)
+        }
+
+        Spacer(Modifier.height(10.dp))
+        MiuiButton(
+            text = "刷入到该分区",
+            onClick = { vm.askFlash() },
+            enabled = vm.flashCanStart,
+            danger = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+    }
+
+    // ── 手动选分区 ──
+    if (vm.flashManualPicker) {
+        AlertDialog(
+            onDismissRequest = { vm.closeManualPicker() },
+            title = { Text("从分区列表选择（${vm.flashPartitions.size} 个）") },
+            text = {
+                Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState())) {
+                    vm.flashPartitions.forEach { p ->
+                        Row(
+                            Modifier.fillMaxWidth()
+                                .clickable { vm.chooseTarget(p); vm.closeManualPicker() }
+                                .padding(vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(p.name, fontSize = 12.sp, modifier = Modifier.weight(1f))
+                            Text(fmtSize(p.sizeBytes), fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { vm.closeManualPicker() }) { Text("取消") }
+            }
+        )
+    }
+
+    // ── 最后确认：把要执行的指令原样摆出来，确认没发错 ──
+    if (vm.flashConfirm) {
+        val t = target
+        val prepared = img
+        if (t != null && prepared != null) {
+            AlertDialog(
+                onDismissRequest = { vm.cancelFlash() },
+                title = { Text("⚠ 确认刷入") },
+                text = {
+                    Column {
+                        Text("设备：${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}", fontSize = 12.sp)
+                        Text("目标分区：${t.name}", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                        Text("设备节点：${t.path}", fontSize = 11.sp)
+                        Text("分区容量：${fmtSize(t.sizeBytes)}", fontSize = 11.sp)
+                        Text("镜　　像：${prepared.meta.fileName}  ${fmtSize(prepared.meta.bytes)}", fontSize = 11.sp)
+                        Text("SHA-256：${prepared.meta.sha256}", fontSize = 9.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Spacer(Modifier.height(6.dp))
+                        Text("将执行：", fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                        Text(
+                            "dd of='${t.path}' bs=1048576 conv=fsync",
+                            fontSize = 10.sp,
+                            fontFamily = FontFamily.Monospace,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        if (vm.flashRiskNote.isNotEmpty()) {
+                            Spacer(Modifier.height(6.dp))
+                            Text("⚠ ${vm.flashRiskNote}", fontSize = 11.sp, color = MaterialTheme.colorScheme.error)
+                        }
+                        Spacer(Modifier.height(6.dp))
+                        Text("写错分区会导致设备无法开机，请确认机型与槽位无误。", fontSize = 11.sp, color = MaterialTheme.colorScheme.error)
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = { vm.doFlash() }) {
+                        Text("确认刷入", color = MiuiColors.Red, fontWeight = FontWeight.Bold)
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { vm.cancelFlash() }) { Text("取消") }
+                }
+            )
+        }
+    }
+}
+
