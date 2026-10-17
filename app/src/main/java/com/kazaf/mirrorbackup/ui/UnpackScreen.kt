@@ -27,7 +27,6 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -98,48 +97,36 @@ class UnpackViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    /** 一键安装并启动内置的完整解包器（原封不动嵌入的参考 APP，root 静默安装） */
-    fun launchEmbedded(ctx: android.content.Context) {
-        viewModelScope.launch {
-            val ok = withContext(Dispatchers.IO) {
-                try {
-                    val apk = File(ctx.cacheDir, "payload_dumper.apk")
-                    ctx.assets.open("payload_dumper.apk").use { input ->
-                        apk.outputStream().use { out -> input.copyTo(out, 1024 * 1024) }
-                    }
-                    val install = com.kazaf.mirrorbackup.core.SuManager
-                        .exec("pm install -r -d ${com.kazaf.mirrorbackup.core.SuManager.quote(apk.absolutePath)}", 120_000)
-                    val okInstall = install.stdout.contains("Success") || install.exitCode == 0
-                    Thread.sleep(1500)
-                    val launch = com.kazaf.mirrorbackup.core.SuManager
-                        .exec("am start -n com.rhythmcache.payloaddumper/.MainActivity", 20_000)
-                    engine.log.ok("✔ 内置解包器安装: ${if (okInstall) "成功" else install.stderr.take(120)}")
-                    engine.log.info("启动: ${launch.stdout.take(120)}")
-                    okInstall
-                } catch (e: Exception) {
-                    engine.log.error("❌ 安装失败: ${e.message}")
-                    false
-                }
-            }
-            if (!ok) engine.log.warn("⚠ 安装未成功，请在文件管理器手动安装 cache/payload_dumper.apk")
-        }
-    }
-    fun probe() { viewModelScope.launch { engine.jniProbe() } }
-
     var showPartPicker by mutableStateOf(false)
         private set
     var selectedParts by mutableStateOf<Set<String>>(emptySet())
         private set
 
+    /** 打开分区选择：还没有分区清单就先分析当前文件 */
     fun openPartPicker() {
         if (engine.jniPartitions.isEmpty()) {
-            viewModelScope.launch { engine.jniProbe() }
+            val f = pickedFile
+            if (f == null) {
+                engine.log.warn("⚠ 请先选择要解包的卡刷包 / payload.bin")
+                return
+            }
+            viewModelScope.launch {
+                engine.analyze(f)
+                if (engine.jniPartitions.isNotEmpty()) showPartPicker = true
+                else engine.log.warn("⚠ 这个文件里没有可解包的分区（payload.bin）")
+            }
+            return
         }
         showPartPicker = true
     }
 
     fun togglePart(name: String, on: Boolean) {
         selectedParts = if (on) selectedParts + name else selectedParts - name
+    }
+
+    /** 全选 / 取消全选 */
+    fun selectAllParts(all: Boolean) {
+        selectedParts = if (all) engine.jniPartitions.map { it.name }.toSet() else emptySet()
     }
 
     fun closePartPicker() { showPartPicker = false }
@@ -218,7 +205,6 @@ class UnpackViewModel(app: Application) : AndroidViewModel(app) {
 /** 解包工具箱页面（ZIP / payload.bin，支持 1 / 2 / 5 / 满核 并行解包） */
 @Composable
 fun UnpackScreen(vm: UnpackViewModel) {
-    val ctx = LocalContext.current
     val state by vm.engine.state.collectAsState()
     val lines by vm.engine.log.lines.collectAsState()
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -265,26 +251,12 @@ fun UnpackScreen(vm: UnpackViewModel) {
                 modifier = Modifier.fillMaxWidth()
             )
             Spacer(Modifier.height(8.dp))
-            MiuiButton(
-                text = "🚀 一键使用内置完整解包器（推荐，功能最全）",
-                onClick = { vm.launchEmbedded(ctx) },
-                modifier = Modifier.fillMaxWidth()
-            )
-            Spacer(Modifier.height(8.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 MiuiButton(
-                    text = "扫描 Download 目录",
+                    text = "扫描 Download",
                     onClick = { vm.scanDownloads() },
                     modifier = Modifier.weight(1f)
                 )
-                MiuiButton(
-                    text = "JNI 探测",
-                    onClick = { vm.probe() },
-                    modifier = Modifier.weight(1f)
-                )
-            }
-            Spacer(Modifier.height(8.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 MiuiButton(
                     text = "分析包结构",
                     onClick = { vm.analyze() },
@@ -390,16 +362,8 @@ fun UnpackScreen(vm: UnpackViewModel) {
             Spacer(Modifier.height(10.dp))
         }
 
-        // 操作按钮
+        // 操作按钮：一键全部解包 / 按分区解包（勾选，支持全选）
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            if (vm.engine.jniPartitions.isNotEmpty()) {
-                MiuiButton(
-                    text = "分区解包（${vm.engine.jniPartitions.size}）",
-                    onClick = { vm.openPartPicker() },
-                    modifier = Modifier.weight(1f)
-                )
-                Spacer(Modifier.width(8.dp))
-            }
             if (state.running) {
                 MiuiButton(
                     text = stringResource(R.string.unpack_stop),
@@ -409,38 +373,73 @@ fun UnpackScreen(vm: UnpackViewModel) {
                 )
             } else {
                 MiuiButton(
-                    text = stringResource(R.string.unpack_start),
+                    text = "全部解包",
                     onClick = { vm.start() },
                     enabled = vm.pickedFile != null,
                     modifier = Modifier.weight(1f)
                 )
+                if (vm.engine.jniPartitions.isNotEmpty()) {
+                    MiuiButton(
+                        text = "分区解包（${vm.engine.jniPartitions.size}）",
+                        onClick = { vm.openPartPicker() },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
             }
         }
         Spacer(Modifier.height(12.dp))
 
         if (vm.showPartPicker) {
+            val all = vm.engine.jniPartitions
+            val allSelected = all.isNotEmpty() && vm.selectedParts.size >= all.size
             androidx.compose.material3.AlertDialog(
                 onDismissRequest = { vm.closePartPicker() },
                 title = { Text("选择要解包的分区") },
                 text = {
-                    Column(Modifier.heightIn(max = 460.dp).verticalScroll(rememberScrollState())) {
-                        vm.engine.jniPartitions.forEach { p ->
-                            Row(
-                                Modifier.fillMaxWidth().clickable { vm.togglePart(p.name, p.name !in vm.selectedParts) },
-                                verticalAlignment = Alignment.CenterVertically
+                    Column(Modifier.heightIn(max = 460.dp)) {
+                        // 全选 / 取消全选
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                "已选 ${vm.selectedParts.size} / ${all.size}",
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.weight(1f)
+                            )
+                            androidx.compose.material3.TextButton(
+                                onClick = { vm.selectAllParts(!allSelected) }
                             ) {
-                                androidx.compose.material3.Checkbox(
-                                    checked = p.name in vm.selectedParts,
-                                    onCheckedChange = { on -> vm.togglePart(p.name, on) }
+                                Text(
+                                    if (allSelected) "取消全选" else "全选",
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.SemiBold
                                 )
-                                Text(p.name, fontSize = 12.sp, modifier = Modifier.weight(1f))
-                                Text(fmtSize(p.size), fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                        androidx.compose.material3.HorizontalDivider(
+                            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+                        )
+                        Column(Modifier.heightIn(max = 400.dp).verticalScroll(rememberScrollState())) {
+                            all.forEach { p ->
+                                Row(
+                                    Modifier.fillMaxWidth().clickable { vm.togglePart(p.name, p.name !in vm.selectedParts) },
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    androidx.compose.material3.Checkbox(
+                                        checked = p.name in vm.selectedParts,
+                                        onCheckedChange = { on -> vm.togglePart(p.name, on) }
+                                    )
+                                    Text(p.name, fontSize = 12.sp, modifier = Modifier.weight(1f))
+                                    Text(fmtSize(p.size), fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
                             }
                         }
                     }
                 },
                 confirmButton = {
-                    androidx.compose.material3.TextButton(onClick = { vm.startSelected() }) {
+                    androidx.compose.material3.TextButton(
+                        onClick = { vm.startSelected() },
+                        enabled = vm.selectedParts.isNotEmpty()
+                    ) {
                         Text("开始解包（${vm.selectedParts.size}）")
                     }
                 },
