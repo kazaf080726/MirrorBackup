@@ -44,6 +44,11 @@ object UnpackSelfTest {
 
     /** 在后台线程跑变体矩阵，结果落盘为 JSON。不阻塞界面。 */
     fun run(ctx: Context, intent: Intent) {
+        // 基准模式：验证「线程数真的能加速」
+        if (intent.getBooleanExtra("bench", false)) {
+            runBench(ctx, intent)
+            return
+        }
         val payloadPath = intent.getStringExtra("payload")
             ?: File(ctx.cacheDir, "probe_payload.bin").takeIf { it.exists() }?.absolutePath
         val parts = split(intent.getStringExtra("parts") ?: DEFAULT_PARTS, ',')
@@ -229,6 +234,98 @@ object UnpackSelfTest {
 
     private fun split(s: String, sep: Char): List<String> =
         s.split(sep).map { it.trim() }.filter { it.isNotEmpty() }
+
+    /**
+     * 并发基准：同一批分区分别用 N 个线程解出，比较实际吞吐，验证「线程数=真加速」。
+     * ```
+     * adb shell am start -n com.kazaf.mirrorbackup/.MainActivity --ez bench true \
+     *   --es payload /data/user/0/com.kazaf.mirrorbackup/cache/probe_payload.bin \
+     *   --es parts "system,vendor,odm,my_product" --es threads "1,2,4,8"
+     * ```
+     */
+    fun runBench(ctx: Context, intent: Intent) {
+        val payload = intent.getStringExtra("payload")
+            ?: File(ctx.cacheDir, "probe_payload.bin").takeIf { it.exists() }?.absolutePath
+        val names = split(intent.getStringExtra("parts") ?: "system,vendor,odm,my_product", ',')
+        val threadCounts = split(intent.getStringExtra("threads") ?: "1,2,4,8", ',').mapNotNull { it.toIntOrNull() }
+        val out = File(ctx.filesDir, "logs/bench.json")
+        Thread {
+            val root = JSONObject()
+            try {
+                root.put("payload", payload ?: "")
+                root.put("parts", JSONArray(names))
+                if (payload == null) {
+                    root.put("error", "no payload")
+                    writeJson(out, root)
+                    return@Thread
+                }
+                val declared = LinkedHashMap<String, Long>()
+                runCatching {
+                    val json = PayloadDumper.INSTANCE.listLocalPartitions(payload)
+                    val arr = JSONObject(json).optJSONArray("partitions") ?: JSONArray()
+                    for (i in 0 until arr.length()) {
+                        val o = arr.optJSONObject(i) ?: continue
+                        declared[o.optString("name")] = o.optLong("size_bytes")
+                    }
+                }
+                val targets = names.filter { declared.containsKey(it) }
+                root.put("targets", JSONArray(targets))
+                root.put("targetBytes", targets.sumOf { declared[it] ?: 0L })
+
+                val rows = JSONArray()
+                root.put("results", rows)
+                for (n in threadCounts) {
+                    val dir = File(ctx.cacheDir, "bench_$n")
+                    dir.deleteRecursively(); dir.mkdirs()
+                    val t0 = System.nanoTime()
+                    val queue = java.util.concurrent.ConcurrentLinkedQueue<Pair<String, Long>>()
+                    targets.forEach { queue.add(it to (declared[it] ?: 0L)) }
+                    val errors = java.util.Collections.synchronizedList(mutableListOf<String>())
+                    val worker = Runnable {
+                        while (true) {
+                            val p = queue.poll() ?: break
+                            try {
+                                PayloadDumper.INSTANCE.extractLocalPartition(
+                                    payload, p.first, File(dir, "${p.first}.img").absolutePath, null, null
+                                )
+                            } catch (t: Throwable) {
+                                errors.add("${p.first}: ${t.javaClass.simpleName}: ${t.message}")
+                            }
+                        }
+                    }
+                    val threads = (1..n).map { Thread(worker, "bench-$it") }
+                    threads.forEach { it.start() }
+                    threads.forEach { it.join() }
+                    val secs = (System.nanoTime() - t0) / 1e9
+                    val bytes = dir.listFiles()?.sumOf { it.length() } ?: 0L
+                    dir.deleteRecursively()
+                    val row = JSONObject()
+                        .put("threads", n)
+                        .put("seconds", secs)
+                        .put("bytes", bytes)
+                        .put("mbps", if (secs > 0) bytes / secs / 1e6 else 0.0)
+                        .put("errors", JSONArray(errors.toList()))
+                    rows.put(row)
+                    Log.i(TAG, "bench threads=$n -> ${"%.1f".format(row.optDouble("mbps"))} MB/s in ${"%.2f".format(secs)}s")
+                    writeJson(out, root)
+                }
+                root.put("ok", true)
+            } catch (t: Throwable) {
+                Log.e(TAG, "bench failed", t)
+                runCatching { root.put("error", "${t.javaClass.simpleName}: ${t.message}") }
+            }
+            writeJson(out, root)
+        }.apply { name = "unpack-bench" }.start()
+    }
+
+    private fun writeJson(file: File, root: JSONObject) {
+        try {
+            file.parentFile?.mkdirs()
+            file.writeText(root.toString(2))
+        } catch (t: Throwable) {
+            Log.e(TAG, "write bench failed: $t")
+        }
+    }
 
     private fun sha256(file: File): String = try {
         val md = MessageDigest.getInstance("SHA-256")

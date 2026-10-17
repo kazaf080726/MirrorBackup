@@ -30,7 +30,15 @@ class UnpackEngine(private val appContext: android.content.Context) {
         val doneBytes: Long = 0,
         val totalBytes: Long = 0,
         val speedMbps: Double = 0.0,
-        val message: String = ""
+        val message: String = "",
+        /** 当前正在处理的分区（弹窗里显示用） */
+        val current: String = "",
+        /** 当前分区进度 0..100 */
+        val pct: Int = 0,
+        /** 分析中（弹窗用） */
+        val analyzing: Boolean = false,
+        /** 分析阶段提示文字 */
+        val analyzeStep: String = ""
     )
 
     val log = LogBuffer().also { it.attachFile(java.io.File(appContext.filesDir, "logs/app.log")) }
@@ -56,16 +64,39 @@ class UnpackEngine(private val appContext: android.content.Context) {
         log.info("═══ 解包任务开始 ═══")
         log.info("源文件: ${file.absolutePath} (${fmtSize(file.length())})")
         log.info("输出目录: ${outDir.absolutePath}")
-        when {
-            // 选定分区：即使选的是 OTA 压缩包也走 payload 分区解包
-            !selected.isNullOrEmpty() -> unpackPayload(file, outDir, threads, selected)
-            // 一键全部解包：payload.bin / 内含 payload.bin 的 OTA 包 → 解出所有分区
-            isPayloadSource(file) -> unpackPayload(file, outDir, threads, null)
-            isZip(file) -> unpackZip(file, outDir, threads)
-            else -> log.error("❌ 不支持的文件类型（仅支持 ZIP / payload.bin）")
+        log.info("并发线程: $threads")
+        // 清理上一次遗留的临时文件 / 别的包留下的 payload 缓存
+        cleanupTemps(file)
+        _state.value = _state.value.copy(running = true, file = file.name, current = "", pct = 0)
+        try {
+            when {
+                // 选定分区：即使选的是 OTA 压缩包也走 payload 分区解包
+                !selected.isNullOrEmpty() -> unpackPayload(file, outDir, threads, selected)
+                // 一键全部解包：payload.bin / 内含 payload.bin 的 OTA 包 → 解出所有分区
+                isPayloadSource(file) -> unpackPayload(file, outDir, threads, null)
+                isZip(file) -> unpackZip(file, outDir, threads)
+                else -> log.error("❌ 不支持的文件类型（仅支持 ZIP / payload.bin）")
+            }
+        } finally {
+            if (!cancelled) log.ok("✔ 解包完成") else log.warn("⏹ 已停止")
+            _state.value = _state.value.copy(
+                running = false,
+                current = "",
+                message = if (cancelled) "已停止" else _state.value.message
+            )
+            // 任务结束：本包的 payload 临时拷贝 + 临时目录一律清掉，不留垃圾
+            purgeTaskCache(file)
         }
-        if (!cancelled) log.ok("✔ 解包完成") else log.warn("⏹ 已停止")
-        _state.value = _state.value.copy(running = false, message = if (cancelled) "已停止" else _state.value.message)
+    }
+
+    /** 原始 payload.bin：按 CrAU 魔数判断（不依赖文件名） */
+    private fun hasCrAuMagic(file: File): Boolean = try {
+        file.inputStream().use { input ->
+            val b = ByteArray(4)
+            input.read(b) == 4 && String(b) == "CrAU"
+        }
+    } catch (e: Exception) {
+        false
     }
 
     /** 是 payload.bin，或内含 payload.bin 的 OTA 压缩包 */
@@ -81,15 +112,7 @@ class UnpackEngine(private val appContext: android.content.Context) {
                 false
             }
         }
-        // 原始 payload.bin：按 CrAU 魔数判断（不依赖文件名）
-        return try {
-            file.inputStream().use { input ->
-                val b = ByteArray(4)
-                input.read(b) == 4 && String(b) == "CrAU"
-            }
-        } catch (e: Exception) {
-            false
-        }
+        return hasCrAuMagic(file)
     }
 
     private fun isZip(f: File): Boolean = try {
@@ -198,6 +221,7 @@ class UnpackEngine(private val appContext: android.content.Context) {
                             val t0 = System.nanoTime()
                             var lastPct = 0.0
                             val outFile = File(outDir, part.name + ".img")
+                            _state.value = _state.value.copy(current = part.name, pct = 0)
                             try {
                                 outFile.parentFile?.mkdirs()
                                 // 原生解包器约定：outputPath 是「目标 .img 文件路径」，
@@ -219,6 +243,7 @@ class UnpackEngine(private val appContext: android.content.Context) {
                                                 val dt = (System.nanoTime() - t0) / 1e9
                                                 val sp = if (dt > 0.05) done / dt / 1e6 else 0.0
                                                 log.progress("j:${part.name}", f("   ↻ %s: %.0f%%  %s / %s  %.1f MB/s", part.name, pct, fmtSize(done), fmtSize(part.size), sp))
+                                                _state.value = _state.value.copy(current = part.name, pct = pct.toInt())
                                             }
                                             if (warningMessage.isNotEmpty()) log.warn("⚠ ${part.name}: $warningMessage")
                                             return !cancelled
@@ -341,6 +366,7 @@ class UnpackEngine(private val appContext: android.content.Context) {
         }
         val cache = File(appContext.cacheDir, "probe_payload.bin")
         log.info("从压缩包取出 ${entry.name}（${fmtSize(entry.size)}）→ 缓存…")
+        _state.value = _state.value.copy(analyzeStep = "正在取出 payload.bin（${fmtSize(entry.size)}，请稍候）…")
         try {
             ZipFile(file).use { z ->
                 val e = z.getEntry(entry.name)
@@ -354,9 +380,13 @@ class UnpackEngine(private val appContext: android.content.Context) {
                             if (n <= 0) break
                             out.write(buf, 0, n)
                             total += n
-                            if (total - lastLog >= 512L * 1024 * 1024) {
+                            if (total - lastLog >= 256L * 1024 * 1024) {
                                 lastLog = total
+                                val pct = if (entry.size > 0) (total * 100 / entry.size).toInt() else 0
                                 log.progress("payload_copy", f("   取出中 %.2f / %.2f GB", total / 1073741824.0, entry.size / 1073741824.0))
+                                _state.value = _state.value.copy(
+                                    analyzeStep = f("正在取出 payload.bin：%d%%（%.2f / %.2f GB）…", pct, total / 1073741824.0, entry.size / 1073741824.0)
+                                )
                             }
                         }
                     }
@@ -369,6 +399,78 @@ class UnpackEngine(private val appContext: android.content.Context) {
             log.error("❌ 取出 payload.bin 失败: ${e.message}")
             return null
         }
+    }
+
+    // ── 缓存 / 临时目录清理 ────────────────────────────────
+    private fun sizeOf(f: File): Long = if (f.isDirectory) {
+        (f.listFiles() ?: emptyArray()).sumOf { sizeOf(it) }
+    } else f.length()
+
+    /**
+     * 任务开始前清理：删掉缓存目录里的临时拷贝、别的包留下的 payload 缓存、输出根目录里的空目录。
+     * 属于「当前源包」的 payload 缓存保留（同一次会话里 分析 → 解包 不必重复取 8GB）。
+     */
+    fun cleanupTemps(currentSource: File?) {
+        val prefix = currentSource?.absolutePath?.let { "$it|" }
+        var freed = 0L
+        runCatching {
+            // SAF 选择文件时的落盘副本
+            File(appContext.cacheDir, "unpack").listFiles()?.forEach { f ->
+                freed += sizeOf(f); f.deleteRecursively()
+            }
+            // 旧版本内嵌安装包残留 / 诊断自检与基准产物
+            listOf("payload_dumper.apk", "selftest").forEach { name ->
+                val f = File(appContext.cacheDir, name)
+                if (f.exists()) { freed += sizeOf(f); f.deleteRecursively() }
+            }
+            appContext.cacheDir.listFiles()?.forEach { f ->
+                if (f.name.startsWith("bench_")) { freed += sizeOf(f); f.deleteRecursively() }
+            }
+            // payload 临时拷贝
+            appContext.cacheDir.listFiles()?.forEach { f ->
+                if (f.name == "probe_payload.bin" || f.name == "payload_extract.bin") {
+                    val meta = File(appContext.cacheDir, f.name + ".meta")
+                    val mine = prefix != null && runCatching {
+                        meta.readText().trim().startsWith(prefix)
+                    }.getOrDefault(false)
+                    if (!mine) {
+                        freed += sizeOf(f); f.delete()
+                        if (meta.exists()) { freed += meta.length(); meta.delete() }
+                    }
+                }
+            }
+            // 输出根目录里的空目录（取消/失败留下的）
+            File("/storage/emulated/0/解包工具箱").listFiles()?.forEach { d ->
+                if (d.isDirectory && (d.listFiles()?.isEmpty() != false)) {
+                    freed += sizeOf(d); d.deleteRecursively()
+                }
+            }
+        }
+        if (freed > 0) log.info("🧹 已清理临时文件 ${fmtSize(freed)}")
+    }
+
+    /** 任务结束后清理：本包的 payload 临时拷贝 + 临时目录一律删掉，不留垃圾 */
+    fun purgeTaskCache(source: File) {
+        val prefix = source.absolutePath + "|"
+        var freed = 0L
+        runCatching {
+            appContext.cacheDir.listFiles()?.forEach { f ->
+                if (f.name == "probe_payload.bin" || f.name == "payload_extract.bin") {
+                    val meta = File(appContext.cacheDir, f.name + ".meta")
+                    val mine = runCatching {
+                        meta.readText().trim().startsWith(prefix)
+                    }.getOrDefault(false)
+                    if (mine) {
+                        freed += sizeOf(f); f.delete()
+                        if (meta.exists()) { freed += meta.length(); meta.delete() }
+                    }
+                }
+            }
+            File(appContext.cacheDir, "unpack").listFiles()?.forEach { f ->
+                freed += sizeOf(f); f.deleteRecursively()
+            }
+        }
+        if (freed > 0) log.info("🧹 任务结束已清理临时文件 ${fmtSize(freed)}")
     }
     // ── 严格流程：① 分析 ② 前置校验 ─────────────────
     data class Analysis(
@@ -400,6 +502,14 @@ class UnpackEngine(private val appContext: android.content.Context) {
         jniPayloadPath = path
     }
 
+    /** 换文件时清掉旧分区清单，避免拿上一个包的分区去解当前包 */
+    fun clearPartitions() {
+        jniPartitions = emptyList()
+        jniPartitionsFrom = ""
+        jniPayloadPath = ""
+        analysis = null
+    }
+
     /** 用本机原生库读取分区清单（zip 会先取出 payload.bin） */
     private fun jniList(path: String): List<JPart> {
         return try {
@@ -426,40 +536,53 @@ class UnpackEngine(private val appContext: android.content.Context) {
     suspend fun analyze(file: File) = withContext(Dispatchers.IO) {
         analysis = null
         log.clear()
-        log.info("═══ ① 包分析 ═══")
-        log.info("文件: ${file.name} (${fmtSize(file.length())})")
-        val isZip = try { ZipFile(file).use { true } } catch (e: Exception) { false }
-        if (isZip) {
-            // 普通 ZIP（包内没有 payload.bin）：按条目解压
-            val hasPayload = try {
-                ZipFile(file).use { z ->
-                    z.entries().toList().any {
-                        !it.isDirectory && it.name.substringAfterLast('/').equals("payload.bin", true)
-                    }
-                }
-            } catch (e: Exception) {
-                false
-            }
-            if (!hasPayload) {
-                val entries = try { ZipFile(file).use { z -> z.entries().toList().filter { !it.isDirectory } } } catch (e: Exception) { emptyList() }
-                val a = Analysis(isZip = true, partitions = entries.take(300).map { it.name to it.size.coerceAtLeast(0) },
-                    totalOutBytes = entries.sumOf { it.size.coerceAtLeast(0) })
+        _state.value = _state.value.copy(analyzing = true, analyzeStep = "读取包结构…", message = "正在分析…")
+        try {
+            log.info("═══ ① 包分析 ═══")
+            log.info("文件: ${file.name} (${fmtSize(file.length())})")
+            cleanupTemps(file)
+            val isZip = try { ZipFile(file).use { true } } catch (e: Exception) { false }
+            if (!isZip && !hasCrAuMagic(file)) {
+                log.error("❌ 这个文件既不是 ZIP 卡刷包，也不是 payload.bin")
+                val a = Analysis(error = "文件类型不支持")
                 analysis = a
-                log.ok("✔ ZIP 压缩包（普通解压）")
-                log.info("   条目 ${entries.size} 个 · 解压后 ${fmtSize(a.totalOutBytes)}")
                 return@withContext a
             }
-            log.info("ZIP 内含 payload.bin")
-        }
-        val payload = resolvePayload(file)
-        if (payload == null) {
-            val a = Analysis(error = "无法取得 payload.bin")
+            if (isZip) {
+                // 普通 ZIP（包内没有 payload.bin）：按条目解压
+                val hasPayload = try {
+                    ZipFile(file).use { z ->
+                        z.entries().toList().any {
+                            !it.isDirectory && it.name.substringAfterLast('/').equals("payload.bin", true)
+                        }
+                    }
+                } catch (e: Exception) {
+                    false
+                }
+                if (!hasPayload) {
+                    val entries = try { ZipFile(file).use { z -> z.entries().toList().filter { !it.isDirectory } } } catch (e: Exception) { emptyList() }
+                    val a = Analysis(isZip = true, partitions = entries.take(300).map { it.name to it.size.coerceAtLeast(0) },
+                        totalOutBytes = entries.sumOf { it.size.coerceAtLeast(0) })
+                    analysis = a
+                    log.ok("✔ ZIP 压缩包（普通解压）")
+                    log.info("   条目 ${entries.size} 个 · 解压后 ${fmtSize(a.totalOutBytes)}")
+                    return@withContext a
+                }
+                log.info("ZIP 内含 payload.bin")
+            }
+            val payload = resolvePayload(file)
+            if (payload == null) {
+                val a = Analysis(error = "无法取得 payload.bin")
+                analysis = a
+                return@withContext a
+            }
+            _state.value = _state.value.copy(analyzeStep = "解析分区清单…")
+            val a = analyzePayloadFile(payload)
             analysis = a
-            return@withContext a
+            a
+        } finally {
+            _state.value = _state.value.copy(analyzing = false, analyzeStep = "")
         }
-        val a = analyzePayloadFile(payload)
-        analysis = a
-        a
     }
 
     private fun analyzePayloadFile(f: File): Analysis {

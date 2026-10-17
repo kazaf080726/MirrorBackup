@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -36,6 +37,7 @@ import androidx.lifecycle.viewModelScope
 import com.kazaf.mirrorbackup.R
 import com.kazaf.mirrorbackup.core.CpuDetector
 import com.kazaf.mirrorbackup.core.UnpackEngine
+import com.kazaf.mirrorbackup.core.f
 import com.kazaf.mirrorbackup.core.fmtSize
 import com.kazaf.mirrorbackup.ui.components.CircularProgressRing
 import com.kazaf.mirrorbackup.ui.components.FormatChip
@@ -52,48 +54,155 @@ import java.io.File
 
 class UnpackViewModel(app: Application) : AndroidViewModel(app) {
     val engine = UnpackEngine(app)
-    var threads by mutableStateOf(4)
+
+    /** 解包线程：null = 用户还没选（全量解包前必须先选） */
+    var threads by mutableStateOf<Int?>(null)
         private set
     var pickedFile by mutableStateOf<File?>(null)
         private set
     var pickedName by mutableStateOf("")
         private set
 
+    /** 没选线程就点解包时弹出提示 */
+    var showThreadHint by mutableStateOf(false)
+        private set
+
+    /** 选择文件后的读取/拷贝进度（系统文件管理器可能只给 URI，需要落地才有路径） */
+    var picking by mutableStateOf(false)
+        private set
+    var pickStep by mutableStateOf("")
+        private set
+
     fun chooseThreads(n: Int) {
         threads = n
+        showThreadHint = false
     }
 
-    var scanning by mutableStateOf(false)
+    fun dismissThreadHint() { showThreadHint = false }
 
-    var scanResults by mutableStateOf<List<File>>(emptyList())
+    fun pick(file: File) {
+        pickedFile = file
+        pickedName = file.name
+        engine.clearPartitions()
+        selectedParts = emptySet()
+        engine.log.clear()
+        engine.log.info("已选择文件: ${file.name} (${fmtSize(file.length())})")
+    }
 
-    /** 扫描 Download 目录中的 zip / payload.bin（深度 6，供无 SAF 快速选择） */
-    fun scanDownloads() {
-        if (scanning) return
-        scanning = true
+    /**
+     * 系统文件管理器返回的 URI 落地：
+     * 1) 能直接映射成真实路径（externalstorage 文档 / MediaStore 的 _data）→ 直接用，零拷贝；
+     * 2) 映射不出来才复制到应用缓存（有进度提示，不卡界面）。
+     */
+    fun pick(uri: Uri) {
         viewModelScope.launch {
-            val list = withContext(Dispatchers.IO) {
-                val root = File("/storage/emulated/0/Download")
-                val out = mutableListOf<File>()
-                fun walk(dir: File, depth: Int) {
-                    if (depth > 6 || out.size >= 40) return
-                    val kids = dir.listFiles() ?: return
-                    for (k in kids) {
-                        if (k.isDirectory) walk(k, depth + 1)
-                        else {
-                            val n = k.name.lowercase()
-                            if ((n.endsWith(".zip") || n.contains("payload") || n.endsWith(".bin"))) {
-                                out.add(k)
-                            }
+            picking = true
+            pickStep = "正在读取所选文件…"
+            val f = withContext(Dispatchers.IO) {
+                val direct = resolveDocumentPath(uri)
+                if (direct != null && direct.exists() && direct.canRead()) {
+                    engine.log.info("✔ 直接使用所选文件: ${direct.absolutePath}")
+                    direct
+                } else {
+                    copyUriToCache(uri)
+                }
+            }
+            picking = false
+            pickStep = ""
+            if (f != null) pick(f)
+            else engine.log.error("❌ 无法读取所选文件（可能是云盘/网盘占位文件）")
+        }
+    }
+
+    /** 把 SA F 文档 URI 映射成真实文件路径（映射不出来返回 null） */
+    private fun resolveDocumentPath(uri: Uri): File? {
+        if (uri.scheme == "file") return uri.path?.let { File(it) }
+        // 内部存储 / SD 卡（系统文件管理器的“浏览”默认走这个 provider）
+        if (uri.authority == "com.android.externalstorage.documents") {
+            val docId = uri.lastPathSegment ?: return null
+            if (docId.startsWith("raw:")) return File(docId.removePrefix("raw:"))
+            val vol = docId.substringBefore(':', "")
+            val rel = docId.substringAfter(':', "")
+            if (rel.isEmpty()) return null
+            val base = when {
+                vol.equals("primary", true) -> android.os.Environment.getExternalStorageDirectory()
+                vol.equals("home", true) -> File(android.os.Environment.getExternalStorageDirectory(), "Documents")
+                else -> File("/storage/$vol")
+            }
+            val f = File(base, rel)
+            if (f.exists() && f.canRead()) return f
+        }
+        // MediaStore / Downloads 等：查 _data 列
+        return try {
+            getApplication<Application>().contentResolver
+                .query(uri, arrayOf("_data"), null, null, null)?.use { c ->
+                    val idx = c.getColumnIndex("_data")
+                    if (idx >= 0 && c.moveToFirst()) c.getString(idx)?.let { p ->
+                        File(p).takeIf { it.exists() && it.canRead() }
+                    } else null
+                }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /** 兜底：把 URI 内容复制到缓存目录（逐块读写，带进度，不卡主线程） */
+    private fun copyUriToCache(uri: Uri): File? {
+        return try {
+            val ctx = getApplication<Application>()
+            val name = queryName(uri) ?: "input.zip"
+            val dir = File(ctx.cacheDir, "unpack")
+            dir.listFiles()?.forEach { it.deleteRecursively() }
+            dir.mkdirs()
+            val target = File(dir, name)
+            val total = querySize(uri)
+            ctx.contentResolver.openInputStream(uri)?.use { input ->
+                target.outputStream().use { out ->
+                    val buf = ByteArray(4 * 1024 * 1024)
+                    var done = 0L
+                    var lastStep = -1
+                    while (true) {
+                        val n = input.read(buf)
+                        if (n <= 0) break
+                        out.write(buf, 0, n)
+                        done += n
+                        val pct = if (total > 0) (done * 100 / total).toInt() else -1
+                        if (pct != lastStep && pct >= 0) {
+                            lastStep = pct
+                            pickStep = "正在复制到缓存：$pct%（${fmtSize(done)} / ${fmtSize(total)}）"
                         }
                     }
                 }
-                walk(root, 0)
-                out.sortedByDescending { it.length() }
             }
-            scanResults = list
-            scanning = false
-            engine.log.info("扫描 Download: 找到 ${list.size} 个候选包")
+            engine.log.ok("✔ 已复制所选文件到缓存: ${fmtSize(target.length())}")
+            target
+        } catch (e: Exception) {
+            engine.log.error("❌ 复制失败: ${e.message}")
+            null
+        }
+    }
+
+    private fun queryName(uri: Uri): String? {
+        val ctx = getApplication<Application>()
+        return try {
+            ctx.contentResolver.query(uri, null, null, null, null)?.use { c ->
+                val idx = c.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
+                if (idx >= 0 && c.moveToFirst()) c.getString(idx) else null
+            }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private fun querySize(uri: Uri): Long {
+        val ctx = getApplication<Application>()
+        return try {
+            ctx.contentResolver.query(uri, null, null, null, null)?.use { c ->
+                val idx = c.getColumnIndex(android.provider.OpenableColumns.SIZE)
+                if (idx >= 0 && c.moveToFirst()) c.getLong(idx) else 0L
+            } ?: 0L
+        } catch (e: Exception) {
+            0L
         }
     }
 
@@ -104,6 +213,7 @@ class UnpackViewModel(app: Application) : AndroidViewModel(app) {
 
     /** 打开分区选择：还没有分区清单就先分析当前文件 */
     fun openPartPicker() {
+        if (threads == null) { showThreadHint = true; return }
         if (engine.jniPartitions.isEmpty()) {
             val f = pickedFile
             if (f == null) {
@@ -133,68 +243,26 @@ class UnpackViewModel(app: Application) : AndroidViewModel(app) {
 
     fun startSelected() {
         val f = pickedFile ?: return
+        val t = threads
         val sel = selectedParts.toList()
         if (sel.isEmpty()) return
+        if (t == null) { showThreadHint = true; return }
         showPartPicker = false
         if (engine.state.value.running) return
-        viewModelScope.launch { engine.unpack(f, threads.coerceIn(1, 16), sel) }
-    }
-
-
-    fun clearScan() { scanResults = emptyList() }
-
-    fun pick(file: File) {
-        pickedFile = file
-        pickedName = file.name
-        engine.log.clear()
-        engine.log.info("已选择文件: ${file.name} (${fmtSize(file.length())})")
+        viewModelScope.launch { engine.unpack(f, t.coerceIn(1, 16), sel) }
     }
 
     fun analyze() {
         val f = pickedFile ?: return
         viewModelScope.launch { engine.analyze(f) }
     }
-    fun pick(uri: Uri) {
-        viewModelScope.launch {
-            val f = withContext(Dispatchers.IO) {
-                try {
-                    val name = queryName(uri) ?: "input.bin"
-                    val dir = File(getApplication<Application>().cacheDir, "unpack")
-                    dir.mkdirs()
-                    val target = File(dir, name)
-                    getApplication<Application>().contentResolver.openInputStream(uri)?.use { input ->
-                        target.outputStream().use { out -> input.copyTo(out, 512 * 1024) }
-                    }
-                    target
-                } catch (e: Exception) {
-                    null
-                }
-            }
-            if (f != null) {
-                pickedFile = f
-                pickedName = f.name
-                engine.log.clear()
-                engine.log.info("已选择文件: ${f.name} (${fmtSize(f.length())})")
-            }
-        }
-    }
-
-    private fun queryName(uri: Uri): String? {
-        val ctx = getApplication<Application>()
-        return try {
-            ctx.contentResolver.query(uri, null, null, null, null)?.use { c ->
-                val idx = c.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
-                if (idx >= 0 && c.moveToFirst()) c.getString(idx) else null
-            }
-        } catch (e: Exception) {
-            null
-        }
-    }
 
     fun start() {
         val f = pickedFile ?: return
         if (engine.state.value.running) return
-        viewModelScope.launch { engine.unpack(f, threads.coerceIn(1, 16)) }
+        // 必须先选解包线程，否则不开始全量解包
+        val t = threads ?: run { showThreadHint = true; return }
+        viewModelScope.launch { engine.unpack(f, t.coerceIn(1, 16)) }
     }
 
     fun stop() {
@@ -251,43 +319,12 @@ fun UnpackScreen(vm: UnpackViewModel) {
                 modifier = Modifier.fillMaxWidth()
             )
             Spacer(Modifier.height(8.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                MiuiButton(
-                    text = "扫描 Download",
-                    onClick = { vm.scanDownloads() },
-                    modifier = Modifier.weight(1f)
-                )
-                MiuiButton(
-                    text = "分析包结构",
-                    onClick = { vm.analyze() },
-                    enabled = vm.pickedFile != null,
-                    modifier = Modifier.weight(1f)
-                )
-            }
-            if (vm.scanResults.isNotEmpty()) {
-                Spacer(Modifier.height(6.dp))
-                androidx.compose.material3.AlertDialog(
-                    onDismissRequest = { vm.clearScan() },
-                    title = { Text("选择解包文件（${vm.scanResults.size} 个）") },
-                    text = {
-                        Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState())) {
-                            vm.scanResults.forEach { f ->
-                                Text(
-                                    f.name + "  (" + fmtSize(f.length()) + ")",
-                                    fontSize = 12.sp,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(vertical = 8.dp)
-                                        .clickable { vm.pick(f); vm.clearScan() }
-                                )
-                            }
-                        }
-                    },
-                    confirmButton = {
-                        androidx.compose.material3.TextButton(onClick = { vm.clearScan() }) { Text("取消") }
-                    }
-                )
-            }
+            MiuiButton(
+                text = "分析包结构",
+                onClick = { vm.analyze() },
+                enabled = vm.pickedFile != null && !vm.picking,
+                modifier = Modifier.fillMaxWidth()
+            )
             Spacer(Modifier.height(6.dp))
             Text(
                 stringResource(R.string.unpack_output) + ": /storage/emulated/0/解包工具箱/",
@@ -301,10 +338,19 @@ fun UnpackScreen(vm: UnpackViewModel) {
         LiquidGlassCard(Modifier.fillMaxWidth()) {
             SectionTitle(stringResource(R.string.unpack_threads))
             Text(
-                "⚡ 检测到 ${CpuDetector.cores} 核 → 满核 ${CpuDetector.cores} 线程",
+                "⚡ 检测到 ${CpuDetector.cores} 核 → 满核 ${CpuDetector.cores} 线程（多分区并行，实测 4 线程约为 1 线程的 2 倍）",
                 fontSize = 11.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+            if (vm.threads == null) {
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "⚠ 请先选择线程，选完才能开始解包",
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
             Spacer(Modifier.height(6.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 FormatChip(
@@ -452,5 +498,111 @@ fun UnpackScreen(vm: UnpackViewModel) {
         SectionTitle(stringResource(R.string.unpack_log))
         TerminalLog(lines, Modifier.fillMaxWidth(), height = 280.dp)
         Spacer(Modifier.height(96.dp))
+    }
+
+    // ── 线程未选择时的提示 ──
+    if (vm.showThreadHint) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { vm.dismissThreadHint() },
+            title = { Text("请先选择解包线程") },
+            text = {
+                Text(
+                    "先在「解包线程」里选 1 / 2 / 5 / 满核，选完才能开始解包。\n" +
+                        "多分区是并行解包的，线程越多越快。",
+                    fontSize = 13.sp
+                )
+            },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = { vm.dismissThreadHint() }) { Text("知道了") }
+            }
+        )
+    }
+
+    // ── 读取/复制所选文件（系统文件管理器只给 URI 时要落地） ──
+    if (vm.picking) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { },
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    androidx.compose.material3.CircularProgressIndicator(
+                        modifier = Modifier.size(18.dp), strokeWidth = 2.dp
+                    )
+                    Spacer(Modifier.width(10.dp))
+                    Text("正在读取所选文件…")
+                }
+            },
+            text = { Text(vm.pickStep.ifEmpty { "请稍候…" }, fontSize = 12.sp) },
+            confirmButton = { }
+        )
+    }
+
+    // ── 分析中：明确告诉用户在干活，不是卡住 ──
+    if (state.analyzing) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { },
+            title = {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    androidx.compose.material3.CircularProgressIndicator(
+                        modifier = Modifier.size(18.dp), strokeWidth = 2.dp
+                    )
+                    Spacer(Modifier.width(10.dp))
+                    Text("正在分析…")
+                }
+            },
+            text = {
+                Text(
+                    state.analyzeStep.ifEmpty { "读取包结构…" },
+                    fontSize = 12.sp
+                )
+            },
+            confirmButton = { }
+        )
+    }
+
+    // ── 解包中：实时进度弹窗（可停止） ──
+    if (state.running) {
+        val total = state.total.coerceAtLeast(0)
+        val done = state.done.coerceAtLeast(0)
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { },
+            title = { Text(if (total > 0) "正在解包…" else "正在准备…") },
+            text = {
+                Column {
+                    if (total > 0) {
+                        androidx.compose.material3.LinearProgressIndicator(
+                            progress = { (done.toFloat() / total).coerceIn(0f, 1f) },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                    } else {
+                        androidx.compose.material3.LinearProgressIndicator(Modifier.fillMaxWidth())
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        if (total > 0) "已完成 $done / $total 个分区" else "正在取出 payload.bin / 读取清单…",
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium
+                    )
+                    if (state.totalBytes > 0) {
+                        Text(
+                            fmtSize(state.doneBytes) + " / " + fmtSize(state.totalBytes) +
+                                "  ·  " + f("%.1f", state.speedMbps) + " MB/s",
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    if (state.current.isNotEmpty()) {
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            "当前: ${state.current}  ${state.pct}%",
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = { vm.stop() }) { Text("停止") }
+            }
+        )
     }
 }
