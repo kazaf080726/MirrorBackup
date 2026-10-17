@@ -283,6 +283,19 @@ class ImageFlasher(
         }
     }
 
+    // ── 重启（刷完 / 注入后让写入生效）──────────────────────────────
+    suspend fun reboot(): CommandCheck = withContext(Dispatchers.IO) {
+        log.info("🔁 正在重启设备…")
+        val script = FlashScript.rebootScript()
+        val r = runCatching { su.exec(script, 8_000) }.getOrNull()
+        if (r != null && r.exitCode == 0) return@withContext CommandCheck(true)
+        // 有的系统 reboot 需要 svc
+        val r2 = runCatching { su.exec("svc power reboot", 8_000) }.getOrNull()
+        if (r2 != null && r2.exitCode == 0) return@withContext CommandCheck(true)
+        log.warn("⚠ 重启命令返回异常（设备可能已经开始重启）")
+        CommandCheck(false, listOf("重启命令未成功（设备可能已开始重启，或需要 root）"))
+    }
+
     private fun fileSha256(f: File): String {
         val md = MessageDigest.getInstance("SHA-256")
         f.inputStream().use { input ->

@@ -128,6 +128,45 @@ fun RestoreScreen(vm: RestoreViewModel) {
         )
     }
 
+    // 写入完成 → 询问是否重启（刷入 / TWRP 注入 / 恢复 成功后都会弹）
+    if (vm.rebootPrompt) {
+        AlertDialog(
+            onDismissRequest = { vm.dismissRebootPrompt() },
+            title = { Text("✔ 写入完成") },
+            text = {
+                Text(
+                    "分区已写入并完成校验。\n现在重启设备让修改生效吗？\n（选择「稍后」也可以随时点页面上的「重启设备」）",
+                    fontSize = 13.sp
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { vm.rebootNow() }) {
+                    Text("立即重启", color = MiuiColors.Red, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { vm.dismissRebootPrompt() }) { Text("稍后") }
+            }
+        )
+    }
+
+    // 手动重启前的二次确认
+    if (vm.rebootConfirm) {
+        AlertDialog(
+            onDismissRequest = { vm.dismissRebootConfirm() },
+            title = { Text("🔁 重启设备") },
+            text = { Text("确定要立即重启设备吗？\n当前若有正在进行的任务会被中断。", fontSize = 13.sp) },
+            confirmButton = {
+                TextButton(onClick = { vm.rebootNow() }) {
+                    Text("重启", color = MiuiColors.Red, fontWeight = FontWeight.Bold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { vm.dismissRebootConfirm() }) { Text("取消") }
+            }
+        )
+    }
+
     Box(Modifier.fillMaxSize()) {
         Column(
             Modifier
@@ -538,6 +577,18 @@ private fun FlashCard(vm: RestoreViewModel, onPick: () -> Unit) {
                 Spacer(Modifier.height(6.dp))
                 Text(it, fontSize = 11.sp, color = if (it.startsWith("✔")) MiuiColors.Green else MiuiColors.Red)
             }
+        }
+
+        Spacer(Modifier.height(8.dp))
+        MiuiButton(
+            text = if (vm.rebooting) "正在重启…" else "🔁 重启设备",
+            onClick = { vm.askReboot() },
+            enabled = !vm.rebooting && !vm.flashBusy && !vm.busy && !vm.twrpBusy,
+            modifier = Modifier.fillMaxWidth()
+        )
+        vm.rebootResult?.let {
+            Spacer(Modifier.height(6.dp))
+            Text(it, fontSize = 11.sp, color = MiuiColors.Red)
         }
     }
 

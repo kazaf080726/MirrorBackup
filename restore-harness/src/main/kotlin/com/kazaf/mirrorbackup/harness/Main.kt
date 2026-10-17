@@ -575,6 +575,17 @@ fun main(args: Array<String>) {
             twrpScript.contains("patch_boot boot_a") && twrpScript.contains("patch_boot boot_b")
     )
 
+    // 8.14 重启脚本（刷完选择重启时执行）
+    val rebootScript = FlashScript.rebootScript()
+    rep.check(
+        "重启脚本先 sync 再 reboot",
+        rebootScript.contains("sync") && rebootScript.contains("reboot")
+    )
+    rep.check(
+        "重启脚本不含任何写分区/删除类命令",
+        !rebootScript.contains("dd ") && !rebootScript.contains("of=") && !rebootScript.contains("rm ")
+    )
+
     // ── 汇总 ──
     out("\n==============================================================")
     out(" 结果: 通过 ${rep.passed} / 失败 ${rep.failed}")

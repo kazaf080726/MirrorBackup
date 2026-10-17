@@ -125,6 +125,9 @@ object FlashScript {
         """.trimIndent()
     }
 
+    /** 重启脚本：先把缓存落盘再重启（写入分区后需要 reboot 才生效） */
+    fun rebootScript(): String = "sync\nreboot"
+
     /** Scene 的 TWRP 注入模式判定（twrp_mode.sh） */
     fun twrpMode(partitionNames: Set<String>): TwrpMode = when {
         "recovery_a" in partitionNames -> TwrpMode.RECOVERY_AB

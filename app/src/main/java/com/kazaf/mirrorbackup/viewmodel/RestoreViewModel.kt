@@ -115,6 +115,9 @@ class RestoreViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 engine.restore(uri, cur.manifest, forceChecked)
+                if (!engine.cancelled) {
+                    withContext(Dispatchers.Main) { rebootPrompt = true }
+                }
             } finally {
                 withContext(Dispatchers.Main) { busy = false }
                 refreshRecords()
@@ -263,10 +266,47 @@ class RestoreViewModel(app: Application) : AndroidViewModel(app) {
                 } else {
                     "❌ 刷入失败：${verdict.summary()}"
                 }
+                if (verdict.ok) rebootPrompt = true
             } finally {
                 withContext(Dispatchers.IO) { flasher.finish() }
                 flashBusy = false
                 flashProgress.value = 0L to 0L
+            }
+        }
+    }
+
+    // ── 重启 ────────────────────────────────────────────────
+    /** 写入成功后自动弹出「是否重启」 */
+    var rebootPrompt by mutableStateOf(false)
+        private set
+    /** 用户手动点「重启设备」时的二次确认 */
+    var rebootConfirm by mutableStateOf(false)
+        private set
+    var rebooting by mutableStateOf(false)
+        private set
+    var rebootResult by mutableStateOf<String?>(null)
+        private set
+
+    fun dismissRebootPrompt() { rebootPrompt = false }
+
+    fun askReboot() { rebootConfirm = true }
+
+    fun dismissRebootConfirm() { rebootConfirm = false }
+
+    /** 立即重启（会先清理临时文件） */
+    fun rebootNow() {
+        if (rebooting) return
+        rebootPrompt = false
+        rebootConfirm = false
+        rebooting = true
+        rebootResult = null
+        viewModelScope.launch {
+            try {
+                withContext(Dispatchers.IO) { flasher.finish() }
+                val r = withContext(Dispatchers.IO) { flasher.reboot() }
+                if (!r.ok) rebootResult = "⚠ ${r.summary()}"
+            } finally {
+                rebooting = false
             }
         }
     }
@@ -352,6 +392,7 @@ class RestoreViewModel(app: Application) : AndroidViewModel(app) {
                 val r = withContext(Dispatchers.IO) { flasher.injectTwrp(f) }
                 twrpResultOk = r.ok
                 twrpResult = if (r.ok) "✔ TWRP 注入完成" else "❌ 注入失败：${r.summary()}"
+                if (r.ok) rebootPrompt = true
             } finally {
                 withContext(Dispatchers.IO) { flasher.finish() }
                 twrpBusy = false
