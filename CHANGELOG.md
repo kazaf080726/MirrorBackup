@@ -1,4 +1,22 @@
 # 更新日志
+## App v2.6.1（2026-10-17 解包模块收尾）
+
+### 🔧 解包：JNI 原生解包实跑打通
+- 确认并固定原生库 `libpayload_dumper.so` 调用约定：`outputPath` 必须是**目标 .img 文件路径**
+  （传目录会抛 `Is a directory (os error 21)`），全量包 `sourceDir` 传 **null** 即可
+- 修复「选择分区解包」选 OTA 压缩包时**错误走整包解压**的问题（现在强制走 payload 分区解包）
+- 解包后逐分区 **SHA-256 校验**（对比 payload 清单 hash）+ 实际大小比对，日志明示通过/不一致
+- payload.bin **缓存复用**：二次分析/解包不再重拷 6~8GB（zip 路径+CRC+大小 旁车标记校验）
+- 停止按钮：取消时不再误记为失败，状态显示「已停止」
+- 诊断入口：`adb shell am start -n com.kazaf.mirrorbackup/.MainActivity --ez selftest true`
+  可跑 JNI 契约自检（结果写应用私有目录 `files/logs/selftest.json`）
+
+### ✅ 真机实测（OPPO PLC110 · KernelSU · 一加 Ace 5 至尊版 16.0.10.500 卡刷包）
+- `vbmeta_system`：4096 B，SHA-256 `941e1456…992a9` —— 与清单完全一致
+- `product`：3,026,944 B，SHA-256 `68824f1c…131e0` —— 与清单完全一致
+- `boot`：67,108,864 B（64 MB），**0.57 s / 117.7 MB/s**（xz 解压+落盘），34 次进度回调，hash 一致
+- 磁盘侧 `sha256sum` 独立复核通过
+
 ## App v2.5.1（2026-10-17 补丁）
 
 ### ⭕ 全圆角化

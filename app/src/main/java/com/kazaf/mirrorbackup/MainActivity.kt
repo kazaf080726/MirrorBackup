@@ -97,6 +97,10 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // adb 触发的解包 JNI 契约自检（--ez selftest true），正常启动不受影响
+        if (com.kazaf.mirrorbackup.core.UnpackSelfTest.wanted(intent)) {
+            com.kazaf.mirrorbackup.core.UnpackSelfTest.run(applicationContext, intent)
+        }
         ThemeState.init(applicationContext)
         enableEdgeToEdge()
         setContent {

@@ -56,6 +56,7 @@ import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -502,7 +503,8 @@ fun MiuiButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
-    danger: Boolean = false
+    danger: Boolean = false,
+    maxLines: Int = 1
 ) {
     val cs = MaterialTheme.colorScheme
     val bg = if (danger) MiuiColors.Red else cs.primary
@@ -528,7 +530,15 @@ fun MiuiButton(
             pressedElevation = 1.dp
         )
     ) {
-        Text(text, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+        Text(
+            text,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = maxLines,
+            softWrap = maxLines > 1,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center
+        )
     }
 }
 

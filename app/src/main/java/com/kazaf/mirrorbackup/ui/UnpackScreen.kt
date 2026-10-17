@@ -394,7 +394,7 @@ fun UnpackScreen(vm: UnpackViewModel) {
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             if (vm.engine.jniPartitions.isNotEmpty()) {
                 MiuiButton(
-                    text = "选择分区解包（${vm.engine.jniPartitions.size} 个）",
+                    text = "分区解包（${vm.engine.jniPartitions.size}）",
                     onClick = { vm.openPartPicker() },
                     modifier = Modifier.weight(1f)
                 )
