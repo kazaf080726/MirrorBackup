@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">镜像备份</string>
+    <string name="app_name">备份/解包工具箱</string>
     <string name="header_subtitle">作者：Kazaf · iOS 液态玻璃 · 多线程 · 仅存储</string>
     <string name="tab_backup">备份工作台</string>
     <string name="tab_restore">恢复工作台</string>
@@ -44,4 +44,14 @@
     <string name="btn_grant">授予全部文件访问权限</string>
     <string name="btn_open_folder">打开备份文件夹</string>
     <string name="btn_verify_latest">校验最近一次备份（SHA-256 逐镜像比对）</string>
-</resources>
+    <string name="unpack_tab">解包</string>
+    <string name="unpack_title">解包工具箱</string>
+    <string name="unpack_desc">ZIP 压缩包 / payload.bin 分区镜像解包</string>
+    <string name="unpack_pick">选择文件（ZIP / payload.bin）</string>
+    <string name="unpack_output">输出目录</string>
+    <string name="unpack_threads">解包线程</string>
+    <string name="unpack_start">开始解包</string>
+    <string name="unpack_stop">停止</string>
+    <string name="unpack_clear">清空日志</string>
+    <string name="unpack_log">解包日志</string>
+    <string name="unpack_no_file">尚未选择文件</string></resources>

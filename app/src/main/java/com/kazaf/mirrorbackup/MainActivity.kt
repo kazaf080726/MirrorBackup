@@ -131,6 +131,7 @@ private fun App() {
     val backupVm: BackupViewModel = viewModel()
     val restoreVm: RestoreViewModel = viewModel()
     val settingsVm: SettingsViewModel = viewModel()
+    val unpackVm: com.kazaf.mirrorbackup.ui.UnpackViewModel = viewModel()
     var tab by rememberSaveable { mutableIntStateOf(0) }
     var showThemeSettings by rememberSaveable { mutableStateOf(false) }
 
@@ -301,6 +302,7 @@ private fun App() {
                         } else when (current) {
                             0 -> BackupScreen(backupVm, onOpenRestore = { tab = 1 })
                             1 -> RestoreScreen(restoreVm)
+                            2 -> com.kazaf.mirrorbackup.ui.UnpackScreen(unpackVm)
                             else -> SettingsScreen(settingsVm, backupVm, onOpenTheme = { showThemeSettings = true })
                         }
                     }
@@ -330,7 +332,7 @@ private fun App() {
                     showThemeSettings = false
                 },
                 backdrop = backdrop ?: fallbackBackdrop,
-                tabsCount = 3,
+                tabsCount = 4,
                 isBlurEnabled = enableBlur && backdrop != null,
                 accentColor = MaterialTheme.colorScheme.primary,
                 tabContentColor = MaterialTheme.colorScheme.onSurface,
@@ -341,24 +343,32 @@ private fun App() {
                         onClick = { activateTab(0) },
                     ) {
                         Spacer(Modifier.size(4.dp))
-                        Text("📤", fontSize = 22.sp, modifier = Modifier.width(100.dp), textAlign = TextAlign.Center)
-                        Text("备份工作台", fontSize = 11.sp, modifier = Modifier.width(100.dp), textAlign = TextAlign.Center)
+                        com.kazaf.mirrorbackup.ui.icons.IconBackup(size = 22.dp, color = MaterialTheme.colorScheme.onSurface)
+                        Text(stringResource(R.string.tab_backup), fontSize = 11.sp, modifier = Modifier.width(100.dp), textAlign = TextAlign.Center)
                     }
                     FloatingBottomBarItem(
                         selected = tab == 1,
                         onClick = { activateTab(1) },
                     ) {
                         Spacer(Modifier.size(4.dp))
-                        Text("📥", fontSize = 22.sp, modifier = Modifier.width(100.dp), textAlign = TextAlign.Center)
-                        Text("恢复工作台", fontSize = 11.sp, modifier = Modifier.width(100.dp), textAlign = TextAlign.Center)
+                        com.kazaf.mirrorbackup.ui.icons.IconRestore(size = 22.dp, color = MaterialTheme.colorScheme.onSurface)
+                        Text(stringResource(R.string.tab_restore), fontSize = 11.sp, modifier = Modifier.width(100.dp), textAlign = TextAlign.Center)
                     }
                     FloatingBottomBarItem(
                         selected = tab == 2,
                         onClick = { activateTab(2) },
                     ) {
                         Spacer(Modifier.size(4.dp))
-                        Text("⚙️", fontSize = 22.sp, modifier = Modifier.width(100.dp), textAlign = TextAlign.Center)
-                        Text("设置", fontSize = 11.sp, modifier = Modifier.width(100.dp), textAlign = TextAlign.Center)
+                        com.kazaf.mirrorbackup.ui.icons.IconUnpack(size = 22.dp, color = MaterialTheme.colorScheme.onSurface)
+                        Text(stringResource(R.string.unpack_tab), fontSize = 11.sp, modifier = Modifier.width(100.dp), textAlign = TextAlign.Center)
+                    }
+                    FloatingBottomBarItem(
+                        selected = tab == 3,
+                        onClick = { activateTab(3) },
+                    ) {
+                        Spacer(Modifier.size(4.dp))
+                        com.kazaf.mirrorbackup.ui.icons.IconSettings(size = 22.dp, color = MaterialTheme.colorScheme.onSurface)
+                        Text(stringResource(R.string.tab_settings), fontSize = 11.sp, modifier = Modifier.width(100.dp), textAlign = TextAlign.Center)
                     }
                 }
             )

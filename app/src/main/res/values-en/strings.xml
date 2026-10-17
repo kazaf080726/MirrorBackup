@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">MirrorBackup</string>
+    <string name="app_name">Backup/Unpack Toolbox</string>
     <string name="header_subtitle">by Kazaf · iOS Liquid Glass · Multi-thread · STORE only</string>
     <string name="tab_backup">Backup</string>
     <string name="tab_restore">Restore</string>
@@ -44,4 +44,14 @@
     <string name="btn_grant">Grant all files access</string>
     <string name="btn_open_folder">Open backup folder</string>
     <string name="btn_verify_latest">Verify latest backup (SHA-256 per image)</string>
-</resources>
+    <string name="unpack_tab">Unpack</string>
+    <string name="unpack_title">Unpack Toolbox</string>
+    <string name="unpack_desc">Extract ZIP archives / payload.bin images</string>
+    <string name="unpack_pick">Choose file (ZIP / payload.bin)</string>
+    <string name="unpack_output">Output folder</string>
+    <string name="unpack_threads">Threads</string>
+    <string name="unpack_start">Start unpack</string>
+    <string name="unpack_stop">Stop</string>
+    <string name="unpack_clear">Clear log</string>
+    <string name="unpack_log">Unpack log</string>
+    <string name="unpack_no_file">No file selected</string></resources>

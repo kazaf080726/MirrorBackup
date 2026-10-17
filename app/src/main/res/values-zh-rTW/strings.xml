@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">鏡像備份</string>
+    <string name="app_name">備份/解包工具箱</string>
     <string name="header_subtitle">作者：Kazaf · iOS 液態玻璃 · 多執行緒 · 僅儲存</string>
     <string name="tab_backup">備份工作台</string>
     <string name="tab_restore">還原工作台</string>
@@ -44,4 +44,14 @@
     <string name="btn_grant">授予所有檔案存取權限</string>
     <string name="btn_open_folder">開啟備份資料夾</string>
     <string name="btn_verify_latest">校驗最近一次備份（SHA-256 逐鏡像比對）</string>
-</resources>
+    <string name="unpack_tab">解包</string>
+    <string name="unpack_title">解包工具箱</string>
+    <string name="unpack_desc">ZIP 壓縮檔 / payload.bin 分割鏡像解包</string>
+    <string name="unpack_pick">選擇檔案（ZIP / payload.bin）</string>
+    <string name="unpack_output">輸出目錄</string>
+    <string name="unpack_threads">解包執行緒</string>
+    <string name="unpack_start">開始解包</string>
+    <string name="unpack_stop">停止</string>
+    <string name="unpack_clear">清空日誌</string>
+    <string name="unpack_log">解包日誌</string>
+    <string name="unpack_no_file">尚未選擇檔案</string></resources>
