@@ -98,6 +98,32 @@ class UnpackViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /** 一键安装并启动内置的完整解包器（原封不动嵌入的参考 APP，root 静默安装） */
+    fun launchEmbedded(ctx: android.content.Context) {
+        viewModelScope.launch {
+            val ok = withContext(Dispatchers.IO) {
+                try {
+                    val apk = File(ctx.cacheDir, "payload_dumper.apk")
+                    ctx.assets.open("payload_dumper.apk").use { input ->
+                        apk.outputStream().use { out -> input.copyTo(out, 1024 * 1024) }
+                    }
+                    val install = com.kazaf.mirrorbackup.core.SuManager
+                        .exec("pm install -r -d ${com.kazaf.mirrorbackup.core.SuManager.quote(apk.absolutePath)}", 120_000)
+                    val okInstall = install.stdout.contains("Success") || install.exitCode == 0
+                    Thread.sleep(1500)
+                    val launch = com.kazaf.mirrorbackup.core.SuManager
+                        .exec("am start -n com.rhythmcache.payloaddumper/.MainActivity", 20_000)
+                    engine.log.ok("✔ 内置解包器安装: ${if (okInstall) "成功" else install.stderr.take(120)}")
+                    engine.log.info("启动: ${launch.stdout.take(120)}")
+                    okInstall
+                } catch (e: Exception) {
+                    engine.log.error("❌ 安装失败: ${e.message}")
+                    false
+                }
+            }
+            if (!ok) engine.log.warn("⚠ 安装未成功，请在文件管理器手动安装 cache/payload_dumper.apk")
+        }
+    }
     fun clearScan() { scanResults = emptyList() }
 
     fun pick(file: File) {
@@ -206,6 +232,12 @@ fun UnpackScreen(vm: UnpackViewModel) {
             MiuiButton(
                 text = stringResource(R.string.unpack_pick),
                 onClick = { picker.launch(arrayOf("*/*")) },
+                modifier = Modifier.fillMaxWidth()
+            )
+            Spacer(Modifier.height(8.dp))
+            MiuiButton(
+                text = "🚀 一键使用内置完整解包器（推荐，功能最全）",
+                onClick = { vm.launchEmbedded(ctx) },
                 modifier = Modifier.fillMaxWidth()
             )
             Spacer(Modifier.height(8.dp))

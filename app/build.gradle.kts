@@ -14,8 +14,8 @@ android {
         applicationId = "com.kazaf.mirrorbackup"
         minSdk = 33
         targetSdk = 34
-        versionCode = 13
-        versionName = "2.5.1"
+        versionCode = 14
+        versionName = "2.6.0"
     }
 
     signingConfigs {
