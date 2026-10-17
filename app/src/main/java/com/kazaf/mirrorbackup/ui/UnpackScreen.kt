@@ -4,6 +4,7 @@ import android.app.Application
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -11,6 +12,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
@@ -62,6 +64,53 @@ class UnpackViewModel(app: Application) : AndroidViewModel(app) {
         threads = n
     }
 
+    var scanning by mutableStateOf(false)
+
+    var scanResults by mutableStateOf<List<File>>(emptyList())
+
+    /** 扫描 Download 目录中的 zip / payload.bin（深度 6，供无 SAF 快速选择） */
+    fun scanDownloads() {
+        if (scanning) return
+        scanning = true
+        viewModelScope.launch {
+            val list = withContext(Dispatchers.IO) {
+                val root = File("/storage/emulated/0/Download")
+                val out = mutableListOf<File>()
+                fun walk(dir: File, depth: Int) {
+                    if (depth > 6 || out.size >= 40) return
+                    val kids = dir.listFiles() ?: return
+                    for (k in kids) {
+                        if (k.isDirectory) walk(k, depth + 1)
+                        else {
+                            val n = k.name.lowercase()
+                            if ((n.endsWith(".zip") || n.contains("payload") || n.endsWith(".bin"))) {
+                                out.add(k)
+                            }
+                        }
+                    }
+                }
+                walk(root, 0)
+                out.sortedByDescending { it.length() }
+            }
+            scanResults = list
+            scanning = false
+            engine.log.info("扫描 Download: 找到 ${list.size} 个候选包")
+        }
+    }
+
+    fun clearScan() { scanResults = emptyList() }
+
+    fun pick(file: File) {
+        pickedFile = file
+        pickedName = file.name
+        engine.log.clear()
+        engine.log.info("已选择文件: ${file.name} (${fmtSize(file.length())})")
+    }
+
+    fun analyze() {
+        val f = pickedFile ?: return
+        viewModelScope.launch { engine.analyze(f) }
+    }
     fun pick(uri: Uri) {
         viewModelScope.launch {
             val f = withContext(Dispatchers.IO) {
@@ -159,6 +208,44 @@ fun UnpackScreen(vm: UnpackViewModel) {
                 onClick = { picker.launch(arrayOf("*/*")) },
                 modifier = Modifier.fillMaxWidth()
             )
+            Spacer(Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                MiuiButton(
+                    text = "扫描 Download 目录",
+                    onClick = { vm.scanDownloads() },
+                    modifier = Modifier.weight(1f)
+                )
+                MiuiButton(
+                    text = "分析包结构",
+                    onClick = { vm.analyze() },
+                    enabled = vm.pickedFile != null,
+                    modifier = Modifier.weight(1f)
+                )
+            }
+            if (vm.scanResults.isNotEmpty()) {
+                Spacer(Modifier.height(6.dp))
+                androidx.compose.material3.AlertDialog(
+                    onDismissRequest = { vm.clearScan() },
+                    title = { Text("选择解包文件（${vm.scanResults.size} 个）") },
+                    text = {
+                        Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState())) {
+                            vm.scanResults.forEach { f ->
+                                Text(
+                                    f.name + "  (" + fmtSize(f.length()) + ")",
+                                    fontSize = 12.sp,
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 8.dp)
+                                        .clickable { vm.pick(f); vm.clearScan() }
+                                )
+                            }
+                        }
+                    },
+                    confirmButton = {
+                        androidx.compose.material3.TextButton(onClick = { vm.clearScan() }) { Text("取消") }
+                    }
+                )
+            }
             Spacer(Modifier.height(6.dp))
             Text(
                 stringResource(R.string.unpack_output) + ": /storage/emulated/0/解包工具箱/",
